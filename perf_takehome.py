@@ -409,6 +409,26 @@ class KernelBuilder:
             if i in v_hm:
                 S.vbroadcast(v_hm[i], self.get_const({0: 4097, 2: 33, 4: 9}[i]))
 
+        # Optimization: Fused S2+S3 constants
+        # S2: a * 33 + K2 (K2=0x165667B1)
+        # S3: (a + K3) ^ (a << 9) (K3=0xD3A2646C)
+        # Fused:
+        # t1 = a * 33 + (K2 + K3)
+        # t2 = t1 * 512 + (-K3 * 512)
+        # a3 = t1 ^ t2
+        k2 = 0x165667B1
+        k3 = 0xD3A2646C
+        k2_prime = (k2 + k3) % (2**32)
+        k3_shifted_neg = (-(k3 << 9)) % (2**32)
+
+        v_k2_prime = self.alloc_vector("k2_prime")
+        v_k3_shifted_neg = self.alloc_vector("k3_shifted_neg")
+        v_512 = self.alloc_vector("v_512")
+
+        S.vbroadcast(v_k2_prime, self.get_const(k2_prime))
+        S.vbroadcast(v_k3_shifted_neg, self.get_const(k3_shifted_neg))
+        S.vbroadcast(v_512, self.get_const(512))
+
         # ── Preload L0-L2 node values as scalars ──
         s_na = self.alloc_scalar("na")
         s_tree = []
@@ -523,13 +543,30 @@ class KernelBuilder:
             """Emit hash + direction + index update for a round"""
             level = r % (forest_height + 1)
             for i in vecs:
-                for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
-                    if hi in [0, 2, 4]:
-                        S.valu("multiply_add", v_val[i], v_val[i], v_hm[hi], v_h1[hi])
-                    else:
-                        S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
-                        S.valu(op3, v_t2[i], v_val[i], v_h3[hi])
-                        S.valu(op2, v_val[i], v_t1[i], v_t2[i])
+                # S0: multiply_add(a, 4097, K0)
+                S.valu("multiply_add", v_val[i], v_val[i], v_hm[0], v_h1[0])
+
+                # S1: (a ^ K1) ^ (a >> 19)
+                S.valu("^", v_t1[i], v_val[i], v_h1[1])
+                S.valu(">>", v_t2[i], v_val[i], v_h3[1])
+                S.valu("^", v_val[i], v_t1[i], v_t2[i])
+
+                # S2+S3: Fused
+                # t1 = multiply_add(a, 33, K2_prime)
+                # t2 = multiply_add(t1, 512, K3_shifted_neg)
+                # a = t1 ^ t2
+                S.valu("multiply_add", v_t1[i], v_val[i], v_hm[2], v_k2_prime)
+                S.valu("multiply_add", v_t2[i], v_t1[i], v_512, v_k3_shifted_neg)
+                S.valu("^", v_val[i], v_t1[i], v_t2[i])
+
+                # S4: multiply_add(a, 9, K4)
+                S.valu("multiply_add", v_val[i], v_val[i], v_hm[4], v_h1[4])
+
+                # S5: (a ^ K5) ^ (a >> 16)
+                S.valu("^", v_t1[i], v_val[i], v_h1[5])
+                S.valu(">>", v_t2[i], v_val[i], v_h3[5])
+                S.valu("^", v_val[i], v_t1[i], v_t2[i])
+
                 for vi in range(VLEN):
                     sv = ScalarReg(v_val[i].addr + vi, "")
                     sd = ScalarReg(v_t1[i].addr + vi, "")
