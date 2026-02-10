@@ -293,9 +293,9 @@ class SemanticScheduler:
             self._op_cycles = list(op_cycles)
             self.bundles = _rebuild_bundles_from_cycles(op_cycles)
 
-    def pause(self, n_iters=100):
+    def pause(self, n_iters=100, seed=42):
         if self.deferred:
-            self.schedule_deferred(n_iters=n_iters)
+            self.schedule_deferred(n_iters=n_iters, seed=seed)
         c = len(self.bundles); self.bundles.append({"flow": [("pause",)]})
         if not self.deferred:
             for addr in list(self.last_write.keys()): self.last_write[addr] = c
@@ -371,10 +371,10 @@ class KernelBuilder:
 
     def debug_info(self): return DebugInfo(scratch_map=self.scratch_debug)
 
-    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int):
+    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int, n_groups=16, offset=1, n_iters=100, seed=42):
         S = self.sched
-        n_groups = 16
-        offset = 1
+        # n_groups = 16
+        # offset = 1
 
         # ── Load parameters ──
         params = [self.alloc_scalar(name) for name in ["rds", "nn", "bs", "fh", "fp", "ip", "vp"]]
@@ -570,18 +570,24 @@ class KernelBuilder:
             S.alu("+", s_sp_reg, s_vp, self.get_const(i * VLEN))
             S.vstore(s_sp_reg, v_val[i])
 
-        S.pause(n_iters=100)
+        S.pause(n_iters=n_iters, seed=seed)
         S.print_heatmap()
         self.instrs = S.bundles
 
 
-def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123):
-    random.seed(seed)
-    forest = Tree.generate(forest_height)
-    inp = Input.generate(forest, batch_size, rounds)
-    mem = build_mem_image(forest, inp)
+def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123, n_groups=16, offset=1, n_iters=100, scheduler_seed=42, prebuilt_mem=None, prebuilt_forest=None, prebuilt_inp=None):
+    if prebuilt_mem:
+        forest = prebuilt_forest
+        inp = prebuilt_inp
+        mem = prebuilt_mem
+    else:
+        random.seed(seed)
+        forest = Tree.generate(forest_height)
+        inp = Input.generate(forest, batch_size, rounds)
+        mem = build_mem_image(forest, inp)
+
     kb = KernelBuilder()
-    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds)
+    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds, n_groups=n_groups, offset=offset, n_iters=n_iters, seed=scheduler_seed)
     machine = Machine(mem, kb.instrs, kb.debug_info(), n_cores=N_CORES)
     machine.run()
     ref_mem = list(mem)
