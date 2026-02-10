@@ -371,7 +371,7 @@ class KernelBuilder:
 
     def debug_info(self): return DebugInfo(scratch_map=self.scratch_debug)
 
-    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int):
+    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int, n_iters: int = 100):
         S = self.sched
         n_groups = 16
         offset = 1
@@ -418,23 +418,45 @@ class KernelBuilder:
             S.load(sr, s_na)
             s_tree.append(sr)
 
+        s_diff = self.alloc_scalar("diff")
+
         # L1: pre-broadcast tree[1] and tree[2] as vectors for vselect
         v_l1 = [self.alloc_vector(f"l1_{k}") for k in range(2)]
         S.vbroadcast(v_l1[0], s_tree[1])
         S.vbroadcast(v_l1[1], s_tree[2])
+
+        # L1 Diff
+        v_l1_diff = self.alloc_vector("l1_diff")
+        S.alu("-", s_diff, s_tree[2], s_tree[1])
+        S.vbroadcast(v_l1_diff, s_diff)
 
         # ── Preload L2 node values as vectors for vselect ──
         v_l2 = [self.alloc_vector(f"l2_{k}") for k in range(4)]
         for k in range(4):
             S.vbroadcast(v_l2[k], s_tree[3 + k])
 
+        # L2 Diffs
+        v_l2_diff = [self.alloc_vector(f"l2_diff_{k}") for k in range(2)]
+        S.alu("-", s_diff, s_tree[4], s_tree[3])
+        S.vbroadcast(v_l2_diff[0], s_diff)
+        S.alu("-", s_diff, s_tree[6], s_tree[5])
+        S.vbroadcast(v_l2_diff[1], s_diff)
+
         # ── Preload L3 node values as vectors for vselect ──
         v_l3 = [self.alloc_vector(f"l3_{k}") for k in range(8)]
+        s_l3_vals = []
         for k in range(8):
             S.alu("+", s_na, s_fp, self.get_const(7 + k))
             sr_tmp = self.alloc_scalar(f"l3s_{k}")
             S.load(sr_tmp, s_na)
             S.vbroadcast(v_l3[k], sr_tmp)
+            s_l3_vals.append(sr_tmp)
+
+        # L3 Diffs
+        v_l3_diff = [self.alloc_vector(f"l3_diff_{k}") for k in range(4)]
+        for k in range(4):
+            S.alu("-", s_diff, s_l3_vals[2*k+1], s_l3_vals[2*k])
+            S.vbroadcast(v_l3_diff[k], s_diff)
 
         # Selection temporaries (shared, reused across levels)
         v_sel0 = self.alloc_vector("sel0")
@@ -473,7 +495,7 @@ class KernelBuilder:
                         si = ScalarReg(v_idx[i].addr + vi, "")
                         sd = ScalarReg(v_t1[i].addr + vi, "")
                         S.alu("-", sd, si, s_c1)
-                    S.vselect(v_t2[i], v_t1[i], v_l1[1], v_l1[0])
+                    S.valu("multiply_add", v_t2[i], v_l1_diff, v_t1[i], v_l1[0])
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 2:
                 s_c3 = self.get_const(3)
@@ -484,26 +506,37 @@ class KernelBuilder:
                         S.alu("-", sd, si, s_c3)
                 for i in vecs:
                     S.valu("&", v_cond, v_t1[i], v_o)
-                    S.vselect(v_sel0, v_cond, v_l2[1], v_l2[0])
-                    S.vselect(v_sel1, v_cond, v_l2[3], v_l2[2])
+                    S.valu("multiply_add", v_sel0, v_l2_diff[0], v_cond, v_l2[0])
+                    S.valu("multiply_add", v_sel1, v_l2_diff[1], v_cond, v_l2[2])
+
                     S.valu(">>", v_t2[i], v_t1[i], v_o)
-                    S.vselect(v_t2[i], v_t2[i], v_sel1, v_sel0)
+                    S.valu("-", v_sel1, v_sel1, v_sel0)
+                    S.valu("multiply_add", v_t2[i], v_sel1, v_t2[i], v_sel0)
+
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 3:
                 for i in vecs:
                     S.valu("-", v_t1[i], v_idx[i], v_seven)
                 for i in vecs:
                     S.valu("&", v_cond, v_t1[i], v_o)
-                    S.vselect(v_sel0, v_cond, v_l3[1], v_l3[0])
-                    S.vselect(v_sel1, v_cond, v_l3[3], v_l3[2])
-                    S.vselect(v_sel2, v_cond, v_l3[5], v_l3[4])
-                    S.vselect(v_sel3, v_cond, v_l3[7], v_l3[6])
+                    S.valu("multiply_add", v_sel0, v_l3_diff[0], v_cond, v_l3[0])
+                    S.valu("multiply_add", v_sel1, v_l3_diff[1], v_cond, v_l3[2])
+                    S.valu("multiply_add", v_sel2, v_l3_diff[2], v_cond, v_l3[4])
+                    S.valu("multiply_add", v_sel3, v_l3_diff[3], v_cond, v_l3[6])
+
                     S.valu(">>", v_t2[i], v_t1[i], v_o)
                     S.valu("&", v_cond, v_t2[i], v_o)
-                    S.vselect(v_sel0, v_cond, v_sel1, v_sel0)
-                    S.vselect(v_sel2, v_cond, v_sel3, v_sel2)
+
+                    S.valu("-", v_sel1, v_sel1, v_sel0)
+                    S.valu("multiply_add", v_sel0, v_sel1, v_cond, v_sel0)
+
+                    S.valu("-", v_sel3, v_sel3, v_sel2)
+                    S.valu("multiply_add", v_sel2, v_sel3, v_cond, v_sel2)
+
                     S.valu(">>", v_t2[i], v_t1[i], v_two)
-                    S.vselect(v_t2[i], v_t2[i], v_sel2, v_sel0)
+                    S.valu("-", v_sel2, v_sel2, v_sel0)
+                    S.valu("multiply_add", v_t2[i], v_sel2, v_t2[i], v_sel0)
+
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             else:
                 for i in vecs:
@@ -570,18 +603,18 @@ class KernelBuilder:
             S.alu("+", s_sp_reg, s_vp, self.get_const(i * VLEN))
             S.vstore(s_sp_reg, v_val[i])
 
-        S.pause(n_iters=100)
+        S.pause(n_iters=n_iters)
         S.print_heatmap()
         self.instrs = S.bundles
 
 
-def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123):
+def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123, n_iters: int = 100):
     random.seed(seed)
     forest = Tree.generate(forest_height)
     inp = Input.generate(forest, batch_size, rounds)
     mem = build_mem_image(forest, inp)
     kb = KernelBuilder()
-    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds)
+    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds, n_iters=n_iters)
     machine = Machine(mem, kb.instrs, kb.debug_info(), n_cores=N_CORES)
     machine.run()
     ref_mem = list(mem)
