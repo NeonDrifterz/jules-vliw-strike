@@ -450,6 +450,7 @@ class KernelBuilder:
         S.vbroadcast(v_root, s_tree[0])
 
         s_c1 = self.get_const(1)
+        s_addr_base = self.alloc_scalar("addr_base")
 
         print(f"Scratch usage: {self.scratch_ptr}/{SCRATCH_SIZE} ({SCRATCH_SIZE - self.scratch_ptr} free)")
 
@@ -468,50 +469,47 @@ class KernelBuilder:
                 for i in vecs:
                     S.valu("^", v_val[i], v_val[i], v_root)
             elif level == 1:
+                # v_idx tracks offset (0 or 1)
                 for i in vecs:
-                    for vi in range(VLEN):
-                        si = ScalarReg(v_idx[i].addr + vi, "")
-                        sd = ScalarReg(v_t1[i].addr + vi, "")
-                        S.alu("-", sd, si, s_c1)
-                    S.vselect(v_t2[i], v_t1[i], v_l1[1], v_l1[0])
+                    S.vselect(v_t2[i], v_idx[i], v_l1[1], v_l1[0])
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 2:
-                s_c3 = self.get_const(3)
+                # v_idx tracks offset (0..3)
                 for i in vecs:
-                    for vi in range(VLEN):
-                        si = ScalarReg(v_idx[i].addr + vi, "")
-                        sd = ScalarReg(v_t1[i].addr + vi, "")
-                        S.alu("-", sd, si, s_c3)
-                for i in vecs:
-                    S.valu("&", v_cond, v_t1[i], v_o)
+                    S.valu("&", v_cond, v_idx[i], v_o)
                     S.vselect(v_sel0, v_cond, v_l2[1], v_l2[0])
                     S.vselect(v_sel1, v_cond, v_l2[3], v_l2[2])
-                    S.valu(">>", v_t2[i], v_t1[i], v_o)
+                    S.valu(">>", v_t2[i], v_idx[i], v_o)
                     S.vselect(v_t2[i], v_t2[i], v_sel1, v_sel0)
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 3:
+                # v_idx tracks offset (0..7)
                 for i in vecs:
-                    S.valu("-", v_t1[i], v_idx[i], v_seven)
-                for i in vecs:
-                    S.valu("&", v_cond, v_t1[i], v_o)
+                    S.valu("&", v_cond, v_idx[i], v_o)
                     S.vselect(v_sel0, v_cond, v_l3[1], v_l3[0])
                     S.vselect(v_sel1, v_cond, v_l3[3], v_l3[2])
                     S.vselect(v_sel2, v_cond, v_l3[5], v_l3[4])
                     S.vselect(v_sel3, v_cond, v_l3[7], v_l3[6])
-                    S.valu(">>", v_t2[i], v_t1[i], v_o)
+
+                    S.valu(">>", v_t2[i], v_idx[i], v_o)
                     S.valu("&", v_cond, v_t2[i], v_o)
                     S.vselect(v_sel0, v_cond, v_sel1, v_sel0)
                     S.vselect(v_sel2, v_cond, v_sel3, v_sel2)
-                    S.valu(">>", v_t2[i], v_t1[i], v_two)
+
+                    S.valu(">>", v_t2[i], v_idx[i], v_two)
                     S.vselect(v_t2[i], v_t2[i], v_sel2, v_sel0)
+
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             else:
+                # L>3, compute base addr and add to s_fp
+                base = (1 << level) - 1
+                S.alu("+", s_addr_base, s_fp, self.get_const(base))
                 for i in vecs:
                     for vi in range(VLEN):
                         lp = ScalarReg(v_t1[i].addr + vi, "")
                         ln = ScalarReg(v_t2[i].addr + vi, "")
                         li = ScalarReg(v_idx[i].addr + vi, "")
-                        S.alu("+", lp, s_fp, li)
+                        S.alu("+", lp, s_addr_base, li)
                         S.load(ln, lp)
                 for i in vecs:
                     for vi in range(VLEN):
@@ -523,25 +521,36 @@ class KernelBuilder:
             """Emit hash + direction + index update for a round"""
             level = r % (forest_height + 1)
             for i in vecs:
-                for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
+                for hi, (op1, _, op2, op3, val3) in enumerate(HASH_STAGES):
                     if hi in [0, 2, 4]:
                         S.valu("multiply_add", v_val[i], v_val[i], v_hm[hi], v_h1[hi])
+                    elif hi == 1:
+                        # Stage 1: Move shift to ALU to balance utilization
+                        S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
+                        # Unroll vector shift to scalar ALU
+                        s_shift = self.get_const(val3)
+                        for vi in range(VLEN):
+                            sv = ScalarReg(v_val[i].addr + vi, "")
+                            st = ScalarReg(v_t2[i].addr + vi, "")
+                            S.alu(op3, st, sv, s_shift)
+                        S.valu(op2, v_val[i], v_t1[i], v_t2[i])
                     else:
                         S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
                         S.valu(op3, v_t2[i], v_val[i], v_h3[hi])
                         S.valu(op2, v_val[i], v_t1[i], v_t2[i])
+
+                # Compute direction (val & 1) into v_t1
                 for vi in range(VLEN):
                     sv = ScalarReg(v_val[i].addr + vi, "")
                     sd = ScalarReg(v_t1[i].addr + vi, "")
                     S.alu("&", sd, sv, s_c1)
-                    S.alu("+", sd, sd, s_c1)  # direction + 1
-                S.valu("multiply_add", v_idx[i], v_idx[i], v_two, v_t1[i])  # idx*2 + (dir+1)
+
+                # Update offset: v_idx = v_idx * 2 + d
+                S.valu("multiply_add", v_idx[i], v_idx[i], v_two, v_t1[i])
+
+                # Wrap around at end of tree height
                 if level == forest_height:
-                    for vi in range(VLEN):
-                        si = ScalarReg(v_idx[i].addr + vi, "")
-                        st = ScalarReg(v_t1[i].addr + vi, "")
-                        S.alu("<", st, si, s_nn)
-                        S.alu("*", si, si, st)
+                    S.vbroadcast(v_idx[i], self.get_const(0))
 
         # ─────────────────────────────────────────────────────
         # Multi-phase interleaved execution
@@ -562,6 +571,15 @@ class KernelBuilder:
             for g, r in active:
                 emit_fetch(r, groups[g])
                 emit_hash(r, groups[g])
+
+        # ── Fix up stored indices ──
+        final_level = rounds % (forest_height + 1)
+        if final_level > 0:
+            base = (1 << final_level) - 1
+            v_base = self.alloc_vector("v_base_final")
+            S.vbroadcast(v_base, self.get_const(base))
+            for i in range(n_vecs):
+                S.valu("+", v_idx[i], v_idx[i], v_base)
 
         # ── Store results ──
         for i in range(n_vecs):
