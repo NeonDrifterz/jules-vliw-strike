@@ -371,10 +371,9 @@ class KernelBuilder:
 
     def debug_info(self): return DebugInfo(scratch_map=self.scratch_debug)
 
-    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int):
+    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int, n_groups: int = 16, offset: int = 1):
         S = self.sched
-        n_groups = 16
-        offset = 1
+        # n_groups and offset passed as arguments
 
         # ── Load parameters ──
         params = [self.alloc_scalar(name) for name in ["rds", "nn", "bs", "fh", "fp", "ip", "vp"]]
@@ -486,7 +485,7 @@ class KernelBuilder:
                     S.valu("&", v_cond, v_t1[i], v_o)
                     S.vselect(v_sel0, v_cond, v_l2[1], v_l2[0])
                     S.vselect(v_sel1, v_cond, v_l2[3], v_l2[2])
-                    S.valu(">>", v_t2[i], v_t1[i], v_o)
+                    S.valu("&", v_t2[i], v_t1[i], v_two)
                     S.vselect(v_t2[i], v_t2[i], v_sel1, v_sel0)
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 3:
@@ -498,8 +497,7 @@ class KernelBuilder:
                     S.vselect(v_sel1, v_cond, v_l3[3], v_l3[2])
                     S.vselect(v_sel2, v_cond, v_l3[5], v_l3[4])
                     S.vselect(v_sel3, v_cond, v_l3[7], v_l3[6])
-                    S.valu(">>", v_t2[i], v_t1[i], v_o)
-                    S.valu("&", v_cond, v_t2[i], v_o)
+                    S.valu("&", v_cond, v_t1[i], v_two)
                     S.vselect(v_sel0, v_cond, v_sel1, v_sel0)
                     S.vselect(v_sel2, v_cond, v_sel3, v_sel2)
                     S.valu(">>", v_t2[i], v_t1[i], v_two)
@@ -527,9 +525,20 @@ class KernelBuilder:
                     if hi in [0, 2, 4]:
                         S.valu("multiply_add", v_val[i], v_val[i], v_hm[hi], v_h1[hi])
                     else:
-                        S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
-                        S.valu(op3, v_t2[i], v_val[i], v_h3[hi])
-                        S.valu(op2, v_val[i], v_t1[i], v_t2[i])
+                        if hi == 1 and i == 0:
+                            c1 = self.get_const(0xC761C23C)
+                            c3 = self.get_const(19)
+                            for vi in range(VLEN):
+                                s_val = ScalarReg(v_val[i].addr + vi, "")
+                                s_t1 = ScalarReg(v_t1[i].addr + vi, "")
+                                s_t2 = ScalarReg(v_t2[i].addr + vi, "")
+                                S.alu("^", s_t1, s_val, c1)
+                                S.alu(">>", s_t2, s_val, c3)
+                                S.alu("^", s_val, s_t1, s_t2)
+                        else:
+                            S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
+                            S.valu(op3, v_t2[i], v_val[i], v_h3[hi])
+                            S.valu(op2, v_val[i], v_t1[i], v_t2[i])
                 for vi in range(VLEN):
                     sv = ScalarReg(v_val[i].addr + vi, "")
                     sd = ScalarReg(v_t1[i].addr + vi, "")
@@ -539,9 +548,7 @@ class KernelBuilder:
                 if level == forest_height:
                     for vi in range(VLEN):
                         si = ScalarReg(v_idx[i].addr + vi, "")
-                        st = ScalarReg(v_t1[i].addr + vi, "")
-                        S.alu("<", st, si, s_nn)
-                        S.alu("*", si, si, st)
+                        S.alu("^", si, si, si)
 
         # ─────────────────────────────────────────────────────
         # Multi-phase interleaved execution
@@ -575,13 +582,13 @@ class KernelBuilder:
         self.instrs = S.bundles
 
 
-def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123):
+def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123, n_groups: int = 16, offset: int = 1):
     random.seed(seed)
     forest = Tree.generate(forest_height)
     inp = Input.generate(forest, batch_size, rounds)
-    mem = build_mem_image(forest, inp)
+    mem = build_mem_image(forest, inp, generate_lut=False)
     kb = KernelBuilder()
-    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds)
+    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds, n_groups, offset)
     machine = Machine(mem, kb.instrs, kb.debug_info(), n_cores=N_CORES)
     machine.run()
     ref_mem = list(mem)

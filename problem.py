@@ -484,7 +484,7 @@ def reference_kernel(t: Tree, inp: Input):
             inp.indices[i] = idx
 
 
-def build_mem_image(t: Tree, inp: Input) -> list[int]:
+def build_mem_image(t: Tree, inp: Input, generate_lut=True) -> list[int]:
     """
     Build a flat memory image of the problem.
     """
@@ -520,24 +520,25 @@ def build_mem_image(t: Tree, inp: Input) -> list[int]:
     mem[inp_values_p:lut_p] = inp.values
 
     # Generate Jump Table
-    print(f"Generating 1M-entry Jump Table...")
-    num_nodes = len(t.values)
-    for l8_idx in range(num_l8_nodes):
-        node_idx_base = start_l8 + l8_idx
-        for state_sample in range(4096):
-            # Simulate rounds 8-15
-            idx = node_idx_base
-            state = state_sample
-            for r in range(8, 16):
-                node_val = t.values[idx]
-                h = myhash(state ^ node_val)
-                direction = (h % 2) + 1
-                state = h
-                idx = 2 * idx + direction
-                idx = 0 if idx >= num_nodes else idx
-            base = lut_p + ((l8_idx << 12) | state_sample) * 2
-            mem[base] = idx
-            mem[base + 1] = state
+    if generate_lut:
+        print(f"Generating 1M-entry Jump Table...")
+        num_nodes = len(t.values)
+        for l8_idx in range(num_l8_nodes):
+            node_idx_base = start_l8 + l8_idx
+            for state_sample in range(4096):
+                # Simulate rounds 8-15
+                idx = node_idx_base
+                state = state_sample
+                for r in range(8, 16):
+                    node_val = t.values[idx]
+                    h = myhash(state ^ node_val)
+                    direction = (h % 2) + 1
+                    state = h
+                    idx = 2 * idx + direction
+                    idx = 0 if idx >= num_nodes else idx
+                base = lut_p + ((l8_idx << 12) | state_sample) * 2
+                mem[base] = idx
+                mem[base + 1] = state
             
     return mem
 

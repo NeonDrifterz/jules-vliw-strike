@@ -1,0 +1,2 @@
+devbox
+Linux devbox 6.8.0 #1 SMP PREEMPT_DYNAMIC Wed Jan 14 23:11:35 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
