@@ -188,9 +188,9 @@ class SemanticScheduler:
             self._op_cycles = best_cycles
             rng.setstate(rng_state)
 
-        self._refine_tail_cpsat(deps, max_windows=3, window_cycles=160, time_limit_s=2.0, max_ops_in_window=5000)
+        self._refine_tail_cpsat(deps, max_windows=10, window_cycles=200, time_limit_s=5.0, max_ops_in_window=5000)
 
-    def _refine_tail_cpsat(self, deps, max_windows=3, window_cycles=160, time_limit_s=2.0, max_ops_in_window=5000):
+    def _refine_tail_cpsat(self, deps, max_windows=10, window_cycles=200, time_limit_s=5.0, max_ops_in_window=5000):
         """Windowed CP-SAT refinement: re-schedule tail operations for tighter packing."""
         try:
             from ortools.sat.python import cp_model
@@ -403,9 +403,30 @@ class KernelBuilder:
         v_h1 = [self.alloc_vector(f"h1_{i}") for i in range(6)]
         v_h3 = [self.alloc_vector(f"h3_{i}") for i in range(6)]
         v_hm = {i: self.alloc_vector(f"hm_{i}") for i in [0, 2, 4]}
+
+        # Fused constants for S2+S3 (mapped to indices 2 and 3)
+        # S2: 33*x + K2. S3: (y+K3)^(y<<9).
+        # Fused: (33*x + (K2+K3)) ^ (16896*x + (K2<<9))
+        k2 = HASH_STAGES[2][1]
+        k3 = HASH_STAGES[3][1]
+        c_a = (k2 + k3) % (2**32)     # K2 + K3
+        c_b = 16896                   # 33 * 512
+        c_c = (k2 << 9) % (2**32)     # K2 << 9
+
         for i, (_, v1, _, _, v3) in enumerate(HASH_STAGES):
-            S.vbroadcast(v_h1[i], self.get_const(v1))
-            S.vbroadcast(v_h3[i], self.get_const(v3))
+            if i == 0:
+                S.vbroadcast(v_h1[i], self.get_const(v1))
+                S.vbroadcast(v_h3[i], self.get_const(3))      # h3[0] = 3 (Fetch L2 optimization - scavenged)
+            elif i == 2:
+                S.vbroadcast(v_h1[i], self.get_const(c_a))    # h1[2] = K2+K3
+                S.vbroadcast(v_h3[i], self.get_const(c_b))    # h3[2] = 16896 (reused/scavenged)
+            elif i == 3:
+                S.vbroadcast(v_h1[i], self.get_const(c_c))    # h1[3] = K2<<9
+                S.vbroadcast(v_h3[i], self.get_const(0))      # h3[3] unused
+            else:
+                S.vbroadcast(v_h1[i], self.get_const(v1))
+                S.vbroadcast(v_h3[i], self.get_const(v3))
+
             if i in v_hm:
                 S.vbroadcast(v_hm[i], self.get_const({0: 4097, 2: 33, 4: 9}[i]))
 
@@ -469,19 +490,15 @@ class KernelBuilder:
                     S.valu("^", v_val[i], v_val[i], v_root)
             elif level == 1:
                 for i in vecs:
-                    for vi in range(VLEN):
-                        si = ScalarReg(v_idx[i].addr + vi, "")
-                        sd = ScalarReg(v_t1[i].addr + vi, "")
-                        S.alu("-", sd, si, s_c1)
+                    # Optimized: Use VALU to compute idx - 1
+                    S.valu("-", v_t1[i], v_idx[i], v_o) # v_o is 1
                     S.vselect(v_t2[i], v_t1[i], v_l1[1], v_l1[0])
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 2:
-                s_c3 = self.get_const(3)
+                # Optimized: Use VALU to compute idx - 3. Reuse v_h3[0] (value 3).
+                v_three = v_h3[0]
                 for i in vecs:
-                    for vi in range(VLEN):
-                        si = ScalarReg(v_idx[i].addr + vi, "")
-                        sd = ScalarReg(v_t1[i].addr + vi, "")
-                        S.alu("-", sd, si, s_c3)
+                    S.valu("-", v_t1[i], v_idx[i], v_three)
                 for i in vecs:
                     S.valu("&", v_cond, v_t1[i], v_o)
                     S.vselect(v_sel0, v_cond, v_l2[1], v_l2[0])
@@ -524,7 +541,17 @@ class KernelBuilder:
             level = r % (forest_height + 1)
             for i in vecs:
                 for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
-                    if hi in [0, 2, 4]:
+                    if hi == 2:
+                        # Fused Stage 2+3: (33*x + C_A) ^ (16896*x + C_C)
+                        # Term 1: t1 = 33*x + C_A (using hm[2]=33, h1[2]=C_A)
+                        S.valu("multiply_add", v_t1[i], v_val[i], v_hm[hi], v_h1[hi])
+                        # Term 2: t2 = 16896*x + C_C (using h3[2]=16896, h1[3]=C_C)
+                        S.valu("multiply_add", v_t2[i], v_val[i], v_h3[hi], v_h1[hi+1])
+                        # Result: val = t1 ^ t2
+                        S.valu("^", v_val[i], v_t1[i], v_t2[i])
+                    elif hi == 3:
+                        continue
+                    elif hi in [0, 4]:
                         S.valu("multiply_add", v_val[i], v_val[i], v_hm[hi], v_h1[hi])
                     else:
                         S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
@@ -570,7 +597,7 @@ class KernelBuilder:
             S.alu("+", s_sp_reg, s_vp, self.get_const(i * VLEN))
             S.vstore(s_sp_reg, v_val[i])
 
-        S.pause(n_iters=100)
+        S.pause(n_iters=500)
         S.print_heatmap()
         self.instrs = S.bundles
 
