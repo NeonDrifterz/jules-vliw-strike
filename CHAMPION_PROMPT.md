@@ -5,6 +5,7 @@
 2. Read `CURRENT_STATE.md`. This is your session memory.
 3. Read `JULES_LONGEVITY.md`. Understand the Token Economics and Circuit Breaker protocols.
 4. Read `perf_takehome.py`. This is the production kernel implementation.
+5. **Log Start Time**: Open `CHRONOS.md` and add your session start timestamp immediately. You MUST log your duration and results before session end.
 
 ## 🧠 Phase 2: Technical Objective & Seed Insight
 **Objective**: Optimize the `build_kernel` method to achieve < 1000 cycles for the VLIW take-home challenge.
