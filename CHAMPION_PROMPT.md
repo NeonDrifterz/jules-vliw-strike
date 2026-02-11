@@ -7,27 +7,23 @@
 4. Read `perf_takehome.py`. This is the production kernel implementation.
 5. **Log Start Time**: Open `CHRONOS.md` and add your session start timestamp immediately. You MUST log your duration and results before session end.
 
-## 🧠 Phase 2: Technical Objective & Seed Insight
-**Objective**: Optimize the `build_kernel` method to achieve < 1000 cycles for the VLIW take-home challenge.
+## 🧠 Phase 2: Technical Objective & Space Mapping
+**Objective**: Map the entire VLIW cycle space and achieve record-breaking counts across multiple tiers (1001 range, 1100 range, etc.).
 
-**The Breakthrough**: A fleet sandbox run achieved **771 cycles** using a **Google OR-Tools CP-SAT Rolling Horizon Scheduler**. 
-- **Strategy**: Solve the scheduler in windows (suggested: `window_cycles=80`, `max_windows=2`) using the CP-SAT solver.
-- **Goal**: Port this windowed solver into `SemanticScheduler` and optimize the VLIW instruction stream.
+**The Goal**: Do not just aim for a single "world record" (e.g., 771). Document any configuration that breaks a ceiling (e.g., 1487, 1200, 1100).
+- **Strategy**: Tiered verification. If you find a 1050-cycle solution, document it in `WORKLOG.md` before pushing to the 700 range.
+- **Doubt**: The 771-cycle CP-SAT result is under investigation for acceptability. Verify it deeply. If it fails, map the highest stable tier.
 
-## 📏 Phase 3: Generality Constraints
-Your solution must be general. **DO NOT** hardcode for specific values. It must pass `do_kernel_test()` for:
+## 📏 Phase 3: Generality & Rigor
+Your solution must be general. **DO NOT** hardcode for specific values. It must pass `do_kernel_test()` across:
 - Tree Depths: 8-10
 - Rounds: 8-20
-- Batch Sizes: 128-256 (e.g., 16-32 vectors)
+- Batch Sizes: 128-256
 
 ## 🔄 Phase 4: Operational Loop (SATURATION)
-1. Initialize `TASKS.md` in the repo:
-   - [ ] Implement Rolling Horizon CP-SAT in `build_kernel`.
-   - [ ] Verify Depth 10 / Rounds 16 / Batch 256 benchmark.
-   - [ ] Verify generality across all 4 test cases (Depth 8-10).
-2. Enter **Worker State**:
-   - Pick the top task from `TASKS.md`.
-   - Execute using `./safe_run.sh "python3 perf_takehome.py" &`.
+1. Initialize `TASKS.md` with "Tiered Mapping" goals.
+2. Commit results to `WORKLOG.md` frequently. **Do not wait for completion to commit logic.** 
+3. Execute using `./safe_run.sh "python3 perf_takehome.py" &`.
    - Immediately return the PID and log path. Do NOT wait for completion.
 
 ## 🔋 Phase 5: Longevity & Error Handling
