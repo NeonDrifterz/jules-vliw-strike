@@ -2,3 +2,13 @@ branch:hybrid_search mission:Search for the optimal 8/24 ALU-VALU split. Target 
 branch:bisim_lut mission:Implement the Level-Aware State Equivalence LUT. Target <1150 cycles. Use pwm_run.sh PWM throttler.
 branch:hyper_pack mission:Exhaustive CP-SAT packing with window=320. Target <1200 cycles. Use pwm_run.sh PWM throttler.
 TASK-003,High,python3 perf_takehome.py,PENDING,,logs/genetic_run.log
+TASK-004,High,python3 perf_takehome.py --seed 127,PENDING,,logs/task_004.log
+TASK-005,High,python3 perf_takehome.py --seed 128,PENDING,,logs/task_005.log
+TASK-006,High,python3 perf_takehome.py --seed 129,PENDING,,logs/task_006.log
+TASK-007,High,python3 perf_takehome.py --seed 130,PENDING,,logs/task_007.log
+TASK-008,High,python3 perf_takehome.py --seed 131,PENDING,,logs/task_008.log
+TASK-009,High,python3 perf_takehome.py --seed 132,PENDING,,logs/task_009.log
+TASK-0010,High,python3 perf_takehome.py --seed 133,PENDING,,logs/task_0010.log
+TASK-0011,High,python3 perf_takehome.py --seed 134,PENDING,,logs/task_0011.log
+TASK-0012,High,python3 perf_takehome.py --seed 135,PENDING,,logs/task_0012.log
+TASK-0013,High,python3 perf_takehome.py --seed 136,PENDING,,logs/task_0013.log
