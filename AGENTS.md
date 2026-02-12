@@ -4,3 +4,4 @@
 2. **Async Only:** All tasks >60s must use `safe_run.sh`.
 3. **Validation:** Never assume a file exists. Run `ls -F` first.
 4. **No Hallucination:** If a tool fails, stop and log it. Do not invent a success.
+5. **Strict ASCII:** Use ONLY standard ASCII characters in code and docstrings. Never use mathematical symbols like '×' (U+00D7); use 'x' or '*' instead to prevent SyntaxErrors in strict environments.
