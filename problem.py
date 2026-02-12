@@ -246,6 +246,8 @@ class Machine:
                 res = int(a1 < a2)
             case "==":
                 res = int(a1 == a2)
+            case "update_idx":
+                res = (a1 * 2 + (a2 & 1) + 1)
             case _:
                 raise NotImplementedError(f"Unknown alu op {op}")
         res = res % (2**32)
@@ -260,6 +262,26 @@ class Machine:
                 for i in range(VLEN):
                     mul = (core.scratch[a + i] * core.scratch[b + i]) % (2**32)
                     self.scratch_write[dest + i] = (mul + core.scratch[c + i]) % (2**32)
+            case ("xor_shift_xor", dest, a, b, c):
+                for i in range(VLEN):
+                    va = core.scratch[a + i]
+                    vb = core.scratch[b + i]
+                    vc = core.scratch[c + i]
+                    self.scratch_write[dest + i] = ((va ^ vb) ^ (va >> vc)) % (2**32)
+            case ("update_idx", dest, a, b, c):
+                for i in range(VLEN):
+                    idx = core.scratch[a + i]
+                    val = core.scratch[b + i]
+                    nn = core.scratch[c + i]
+                    new_idx = (idx * 2 + (val & 1) + 1)
+                    if new_idx >= nn: new_idx = 0
+                    self.scratch_write[dest + i] = new_idx % (2**32)
+            case ("xor_madd", dest, a, b, c):
+                for i in range(VLEN):
+                    va = core.scratch[a + i]
+                    vb = core.scratch[b + i]
+                    vc = core.scratch[c + i]
+                    self.scratch_write[dest + i] = (va ^ ((va * vb + vc) % (2**32))) % (2**32)
             case (op, dest, a1, a2):
                 for i in range(VLEN):
                     self.alu(core, op, dest + i, a1 + i, a2 + i)

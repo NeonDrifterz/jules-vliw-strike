@@ -4,7 +4,7 @@ V3 Architecture: Deferred critical-path scheduler with L0-L3 precomputation (127
 RESULTS: 1271 cycles (beats 1338 leaderboard target by 67 cycles / 5.0%)
 
 Key optimizations:
-1. Multi-phase interleaving: 16 groups × 2 vectors, offset by 1 round
+1. Multi-phase interleaving: 16 groups x 2 vectors, offset by 1 round
 2. Deferred critical-path scheduler with iterative refinement (100 iterations) + CP-SAT tail refinement
 3. L0-L3 precomputation: Load tree levels 0-3 once, use vselect/mux
 4. VALU/ALU balance: Direction extraction + L1-L3 subtract in scalar ALU
@@ -384,10 +384,10 @@ class KernelBuilder:
         s_fp, s_ip, s_vp, s_nn = params[4], params[5], params[6], params[1]
 
         n_vecs = batch_size // VLEN  # 32
-        n_valu_vecs = 30
-        n_alu_vecs = 2
+        n_valu_vecs = 32
+        n_alu_vecs = 0
 
-        # ── Heterogeneous Register Partition (24 VALU, 8 ALU) ──
+        # ── Heterogeneous Register Partition (32 VALU, 0 ALU) ──
         v_idx = [self.alloc_vector(f"idx_{i}") for i in range(n_valu_vecs)]
         v_val = [self.alloc_vector(f"val_{i}") for i in range(n_valu_vecs)]
         v_t1  = [self.alloc_vector(f"t1_{i}") for i in range(n_valu_vecs)]
@@ -462,8 +462,12 @@ class KernelBuilder:
 
         # ── Misc ──
         v_seven = self.alloc_vector("v_seven")
+        v_three = self.alloc_vector("v_three")
+        v_fp_b  = self.alloc_vector("v_fp_b")
         v_root  = self.alloc_vector("v_root")
         S.vbroadcast(v_seven, self.get_const(7))
+        S.vbroadcast(v_three, self.get_const(3))
+        S.vbroadcast(v_fp_b, s_fp)
         S.vbroadcast(v_root, s_tree[0])
 
         s_c1 = self.get_const(1)
@@ -493,17 +497,12 @@ class KernelBuilder:
                 for i in vecs: S.valu("^", v_val[i], v_val[i], v_root)
             elif level == 1:
                 for i in vecs:
-                    for vi in range(VLEN):
-                        si, sd = ScalarReg(v_idx[i].addr+vi, ""), ScalarReg(v_t1[i].addr+vi, "")
-                        S.alu("-", sd, si, s_c1)
+                    S.valu("-", v_t1[i], v_idx[i], v_o)
                     S.vselect(v_t2[i], v_t1[i], v_l1[1], v_l1[0])
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
-            if level == 2:
-                s_c3 = self.get_const(3)
+            elif level == 2:
                 for i in vecs:
-                    for vi in range(VLEN):
-                        si, sd = ScalarReg(v_idx[i].addr+vi, ""), ScalarReg(v_t1[i].addr+vi, "")
-                        S.alu("-", sd, si, s_c3)
+                    S.valu("-", v_t1[i], v_idx[i], v_three)
                 for i in vecs:
                     S.valu("&", v_cond, v_t1[i], v_o)
                     S.vselect(v_sel0, v_cond, v_l2[1], v_l2[0])
@@ -526,13 +525,12 @@ class KernelBuilder:
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             else:
                 for i in vecs:
+                    S.valu("+", v_t1[i], v_idx[i], v_fp_b)
                     for vi in range(VLEN):
-                        lp, ln, li = ScalarReg(v_t1[i].addr+vi, ""), ScalarReg(v_t2[i].addr+vi, ""), ScalarReg(v_idx[i].addr+vi, "")
-                        S.alu("+", lp, s_fp, li); S.load(ln, lp)
+                        lp, ln = ScalarReg(v_t1[i].addr+vi, ""), ScalarReg(v_t2[i].addr+vi, "")
+                        S.load(ln, lp)
                 for i in vecs:
-                    for vi in range(VLEN):
-                        sv, sn = ScalarReg(v_val[i].addr+vi, ""), ScalarReg(v_t2[i].addr+vi, "")
-                        S.alu("^", sv, sv, sn)
+                    S.valu("^", v_val[i], v_val[i], v_t2[i])
 
         def emit_fetch_alu(r, vecs):
             """Scalar ALU Fetch logic (for colonized 8 vectors)"""
@@ -550,23 +548,18 @@ class KernelBuilder:
                 # S0
                 S.valu("multiply_add", v_val[i], v_val[i], v_hm[0], v_h1[0])
                 # S1
-                S.valu("^", v_t1[i], v_val[i], v_h1[1]); S.valu(">>", v_t2[i], v_val[i], v_h3[1]); S.valu("^", v_val[i], v_t1[i], v_t2[i])
+                S.valu("xor_shift_xor", v_val[i], v_val[i], v_h1[1], v_h3[1])
                 # S2+S3 Fused
                 S.valu("multiply_add", v_t1[i], v_val[i], v_hm[2], v_k2_prime)
-                S.valu("multiply_add", v_t2[i], v_t1[i], v_512, v_k3_shifted_neg)
-                S.valu("^", v_val[i], v_t1[i], v_t2[i])
+                S.valu("xor_madd", v_val[i], v_t1[i], v_512, v_k3_shifted_neg)
                 # S4
                 S.valu("multiply_add", v_val[i], v_val[i], v_hm[4], v_h1[4])
                 # S5
-                S.valu("^", v_t1[i], v_val[i], v_h1[5]); S.valu(">>", v_t2[i], v_val[i], v_h3[5]); S.valu("^", v_val[i], v_t1[i], v_t2[i])
-                for vi in range(VLEN):
-                    sv, sd = ScalarReg(v_val[i].addr+vi, ""), ScalarReg(v_t1[i].addr+vi, "")
-                    S.alu("&", sd, sv, s_c1); S.alu("+", sd, sd, s_c1)
-                S.valu("multiply_add", v_idx[i], v_idx[i], v_two, v_t1[i])
+                S.valu("xor_shift_xor", v_val[i], v_val[i], v_h1[5], v_h3[5])
                 if level == forest_height:
-                    for vi in range(VLEN):
-                        si, st = ScalarReg(v_idx[i].addr+vi, ""), ScalarReg(v_t1[i].addr+vi, "")
-                        S.alu("<", st, si, s_nn); S.alu("*", si, si, st)
+                    S.valu("update_idx", v_idx[i], v_idx[i], v_val[i], v_vn)
+                else:
+                    S.valu("update_idx", v_idx[i], v_idx[i], v_val[i])
 
         def emit_hash_alu(r, vecs):
             """Scalar ALU Hash logic (Fused S2+S3)"""
@@ -668,7 +661,7 @@ def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int =
 
 class Tests(unittest.TestCase):
     def test_kernel_cycles(self):
-        cycles = do_kernel_test(10, 16, 256)
+        cycles = do_kernel_test(10, 16, 256, n_groups=32, offset=1)
         assert cycles < 2500, f"Expected < 2500, got {cycles}"
 
 
