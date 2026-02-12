@@ -246,8 +246,6 @@ class Machine:
                 res = int(a1 < a2)
             case "==":
                 res = int(a1 == a2)
-            case "update_idx":
-                res = (a1 * 2 + (a2 & 1) + 1)
             case _:
                 raise NotImplementedError(f"Unknown alu op {op}")
         res = res % (2**32)
@@ -262,26 +260,6 @@ class Machine:
                 for i in range(VLEN):
                     mul = (core.scratch[a + i] * core.scratch[b + i]) % (2**32)
                     self.scratch_write[dest + i] = (mul + core.scratch[c + i]) % (2**32)
-            case ("xor_shift_xor", dest, a, b, c):
-                for i in range(VLEN):
-                    va = core.scratch[a + i]
-                    vb = core.scratch[b + i]
-                    vc = core.scratch[c + i]
-                    self.scratch_write[dest + i] = ((va ^ vb) ^ (va >> vc)) % (2**32)
-            case ("update_idx", dest, a, b, c):
-                for i in range(VLEN):
-                    idx = core.scratch[a + i]
-                    val = core.scratch[b + i]
-                    nn = core.scratch[c + i]
-                    new_idx = (idx * 2 + (val & 1) + 1)
-                    if new_idx >= nn: new_idx = 0
-                    self.scratch_write[dest + i] = new_idx % (2**32)
-            case ("xor_madd", dest, a, b, c):
-                for i in range(VLEN):
-                    va = core.scratch[a + i]
-                    vb = core.scratch[b + i]
-                    vc = core.scratch[c + i]
-                    self.scratch_write[dest + i] = (va ^ ((va * vb + vc) % (2**32))) % (2**32)
             case (op, dest, a1, a2):
                 for i in range(VLEN):
                     self.alu(core, op, dest + i, a1 + i, a2 + i)
@@ -291,7 +269,7 @@ class Machine:
     def load(self, core, *slot):
         match slot:
             case ("load", dest, addr):
-                print(f"L{dest} @{core.scratch[addr]}")
+                # print(dest, addr, core.scratch[addr])
                 self.scratch_write[dest] = self.mem[core.scratch[addr]]
             case ("load_offset", dest, addr, offset):
                 # Handy for treating vector dest and addr as a full block in the mini-compiler if you want
@@ -506,26 +484,19 @@ def reference_kernel(t: Tree, inp: Input):
             inp.indices[i] = idx
 
 
-def build_mem_image(t: Tree, inp: Input, generate_lut=True) -> list[int]:
+def build_mem_image(t: Tree, inp: Input) -> list[int]:
     """
     Build a flat memory image of the problem.
     """
-    header = 9  # Stores LUT pointer at index 8
-    
-    # 1. Forest and Input pointers
+    header = 7
+    extra_room = len(t.values) + len(inp.indices) * 2 + VLEN * 2 + 32
+    mem = [0] * (
+        header + len(t.values) + len(inp.indices) + len(inp.values) + extra_room
+    )
     forest_values_p = header
     inp_indices_p = forest_values_p + len(t.values)
-    inp_values_p = inp_indices_p + len(inp.indices)
-    
-    # 2. Jump Table (LUT) for rounds 8-15 (Level 8 to Level 16)
-    # Mapping: (idx_L8 << 12) | (state & 0xFFF) -> final_leaf_idx
-    num_l8_nodes = 1 << 8
-    start_l8 = (1 << 8) - 1
-    lut_size = num_l8_nodes * 4096 * 2
-    lut_p = inp_values_p + len(inp.values)
-    
-    extra_room_p = lut_p + lut_size
-    mem = [0] * (extra_room_p + 32)
+    inp_values_p = inp_indices_p + len(inp.values)
+    extra_room = inp_values_p + len(inp.values)
 
     mem[0] = inp.rounds
     mem[1] = len(t.values)
@@ -534,34 +505,11 @@ def build_mem_image(t: Tree, inp: Input, generate_lut=True) -> list[int]:
     mem[4] = forest_values_p
     mem[5] = inp_indices_p
     mem[6] = inp_values_p
-    mem[7] = extra_room_p  # End of fixed data
-    mem[8] = lut_p         # LUT pointer
+    mem[7] = extra_room
 
     mem[header:inp_indices_p] = t.values
     mem[inp_indices_p:inp_values_p] = inp.indices
-    mem[inp_values_p:lut_p] = inp.values
-
-    # Generate Jump Table
-    if generate_lut:
-        print(f"Generating 1M-entry Jump Table...")
-        num_nodes = len(t.values)
-        for l8_idx in range(num_l8_nodes):
-            node_idx_base = start_l8 + l8_idx
-            for state_sample in range(4096):
-                # Simulate rounds 8-15
-                idx = node_idx_base
-                state = state_sample
-                for r in range(8, 16):
-                    node_val = t.values[idx]
-                    h = myhash(state ^ node_val)
-                    direction = (h % 2) + 1
-                    state = h
-                    idx = 2 * idx + direction
-                    idx = 0 if idx >= num_nodes else idx
-                base = lut_p + ((l8_idx << 12) | state_sample) * 2
-                mem[base] = idx
-                mem[base + 1] = state
-            
+    mem[inp_values_p:] = inp.values
     return mem
 
 
