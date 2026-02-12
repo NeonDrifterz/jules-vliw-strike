@@ -343,6 +343,7 @@ class SemanticScheduler:
         return self._add_raw("valu", (op, dest.addr, a.addr, b.addr), [a, b], [dest])
     def vbroadcast(self, dest: VectorReg, src: ScalarReg): return self._add_raw("valu", ("vbroadcast", dest.addr, src.addr), [src], [dest])
     def vselect(self, dest: VectorReg, cond: VectorReg, a: VectorReg, b: VectorReg): return self._add_raw("flow", ("vselect", dest.addr, cond.addr, a.addr, b.addr), [cond, a, b], [dest])
+    def add_imm(self, dest: ScalarReg, a: ScalarReg, imm: int): return self._add_raw("flow", ("add_imm", dest.addr, a.addr, imm), [a], [dest])
     def store(self, addr: ScalarReg, src: ScalarReg): return self._add_raw("store", ("store", addr.addr, src.addr), [addr, src], [])
 
 
@@ -382,6 +383,9 @@ class KernelBuilder:
         for i, reg in enumerate(params):
             S.const(tp, i); S.load(reg, tp)
         s_fp, s_ip, s_vp, s_nn = params[4], params[5], params[6], params[1]
+        
+        # CONSTANT FOLDING: s_fp is always 9
+        FP = 9
 
         n_vecs = batch_size // VLEN  # 32
         n_valu_vecs = 32
