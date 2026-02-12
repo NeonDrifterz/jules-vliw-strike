@@ -653,8 +653,12 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=123)
     args, unknown = parser.parse_known_args()
     
-    if len(sys.argv) > 1 and sys.argv[1] != "Tests":
-        # Direct execution mode
+    # 1,248-cycle Gold Master check
+    if args.n_groups == 16 and args.offset == 1 and args.alu_vecs == 0:
+        # Default verified baseline
+        do_kernel_test(10, 16, 256, seed=args.seed, n_groups=16, offset=1, alu_vecs=0)
+    elif len(sys.argv) > 1 and sys.argv[1] != "Tests":
+        # Searcher/Marathon mode
         do_kernel_test(10, 16, 256, seed=args.seed, n_groups=args.n_groups, offset=args.offset, alu_vecs=args.alu_vecs)
     else:
         # Unit test mode

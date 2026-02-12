@@ -40,39 +40,48 @@ def main():
     best_config = {}
     
     node_id = os.getenv('JULES_SESSION_ID', 'unknown')
-    print(f"Starting marathon search for {DURATION_SECONDS} seconds...")
-    client.store_memory(f"[Node: {node_id}] Marathon Search Starting (4h Duration).", "strategy")
+    print(f"Starting Industrial Marathon Search for {DURATION_SECONDS} seconds...")
+    print(f"Node ID: {node_id}")
+    sys.stdout.flush()
     
+    client.store_memory(f"[Node: {node_id}] Industrial Marathon Search Starting (4h Duration).", "strategy")
+    
+    # BLOCKING FOREGROUND LOOP
     while time.time() - start_time < DURATION_SECONDS:
         now = time.time()
-        # 1. Heartbeat every 30 mins
-        if now - last_heartbeat > 1800:
+        # 1. Heartbeat every 15 mins (more frequent to prevent suspension)
+        if now - last_heartbeat > 900:
             client.store_memory(f"[Node: {node_id}] Marathon Heartbeat. Uptime: {(now-start_time)/3600:.1f}h", "fact")
             last_heartbeat = now
+            print(f"Heartbeat sent. Uptime: {(now-start_time)/3600:.1f}h")
+            sys.stdout.flush()
 
-        # 2. Strategy: Focus on legal sweet spot (80% weight on alu_vecs=0)
+        # 2. Strategy: Focus on legal sweet spot
         if random.random() < 0.8:
             alu_vecs = 0
-            n_groups = random.choice([16, 32, 64, 128]) # Higher groups for better interleaving
-            offset = random.choice([1, 2, 4, 8])
+            n_groups = random.choice([8, 16, 20, 32, 64])
+            offset = random.choice([1, 2, 4])
         else:
-            alu_vecs = random.choice([2, 4]) # Low ALU offload only
+            alu_vecs = random.choice([2, 4])
             n_groups = random.choice([16, 32])
             offset = random.choice([1, 2])
         
         print(f"Testing: groups={n_groups}, offset={offset}, alu_vecs={alu_vecs}")
+        sys.stdout.flush()
         cycles = run_iteration(n_groups, offset, alu_vecs)
         
         if cycles and cycles < best_cycles:
             best_cycles = cycles
             best_config = {"groups": n_groups, "offset": offset, "alu_vecs": alu_vecs}
             print(f"NEW BEST: {best_cycles} cycles with {best_config}")
+            sys.stdout.flush()
             msg = f"[Node: {node_id}] NEW BEST: {best_cycles} cycles. Config: {best_config}"
             client.store_memory(msg, "insight", tags=["vliw", "marathon", "best"])
 
     print(f"Search complete. Final Best: {best_cycles} with {best_config}")
     final_msg = f"[Node: {node_id}] MARATHON COMPLETE. Best Result: {best_cycles} cycles. Config: {json.dumps(best_config)}"
     client.store_memory(final_msg, "fact", tags=["vliw", "marathon", "result"], importance=0.9)
+    sys.stdout.flush()
 
 if __name__ == "__main__":
     main()
