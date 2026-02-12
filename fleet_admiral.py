@@ -119,14 +119,12 @@ def run_task(task, penfield=None):
         # Use JulesCore for Hybrid CLI/API Spawning (Parity+)
         if JulesCore:
             core = JulesCore()
-            # Construct mission prompt (Hardened)
+            # Construct mission prompt (DETERMINISTIC)
             worker_mission = (
                 f"MISSION: BENCHMARK RUNNER {task_id}.\n"
-                f"1) DO NOT modify the codebase. You are a runner, not a developer.\n"
-                f"2) Export PENFIELD_API_KEY='{os.getenv('PENFIELD_API_KEY')}'\n"
-                f"3) Run the following command exactly: {cmd}\n"
-                f"4) REPORT the final cycle count to Penfield memory using penfield_link.py.\n"
-                f"5) Terminate immediately after reporting. DO NOT submit a PR."
+                f"1) Export PENFIELD_API_KEY='{os.getenv('PENFIELD_API_KEY')}'\n"
+                f"2) Run exactly: bash run_benchmark.sh {task_id} \"{cmd}\"\n"
+                f"3) Termination is automatic after reporting."
             )
             
             session_id = core.spawn(worker_mission)
@@ -140,7 +138,8 @@ def run_task(task, penfield=None):
         else:
             # Fallback to local execution if wrapper missing
             update_state("JulesCore missing. Falling back to local execution.", penfield)
-            result = subprocess.run([STEALTH_RUN, cmd], capture_output=True, text=True, check=True)
+            bench_cmd = f"bash run_benchmark.sh {task_id} \"{cmd}\""
+            result = subprocess.run([STEALTH_RUN, bench_cmd], capture_output=True, text=True, check=True)
             task['Status'] = 'RUNNING'
             return task
 
