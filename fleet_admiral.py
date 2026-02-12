@@ -40,6 +40,10 @@ def main():
     while True:
         print(f"\n[ADMIRAL] Starting orchestration cycle: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         
+        # 0. Sync logic and queue
+        print("[ADMIRAL] Syncing with remote repository...")
+        run_cmd("git pull origin master")
+        
         # 1. Run Approver
         print("[ADMIRAL] Running plan approval cycle...")
         run_cmd(f"bash {APPROVER_SCRIPT}")
