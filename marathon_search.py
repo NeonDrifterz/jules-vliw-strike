@@ -7,7 +7,7 @@ import os
 from penfield_link import PenfieldClient
 
 # Configuration
-DURATION_SECONDS = 2 * 3600  # 2 hours
+DURATION_SECONDS = 4 * 3600  # 4 hours
 RESULTS_FILE = "search_results.json"
 REPO_DIR = os.getcwd()
 
@@ -18,12 +18,12 @@ def run_iteration(n_groups, offset, alu_vecs):
         "--n_groups", str(n_groups),
         "--offset", str(offset),
         "--alu_vecs", str(alu_vecs),
-        "--seed", "123" # Standard validation seed
+        "--seed", "123"
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        # Unbuffered output to keep hypervisor happy
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode == 0:
-            # Extract cycle count from output like "✅ 1248 cycles"
             import re
             match = re.search(r"✅ (\d+) cycles", result.stdout)
             if match:
@@ -35,33 +35,43 @@ def run_iteration(n_groups, offset, alu_vecs):
 def main():
     client = PenfieldClient()
     start_time = time.time()
+    last_heartbeat = start_time
     best_cycles = float('inf')
     best_config = {}
     
+    node_id = os.getenv('JULES_SESSION_ID', 'unknown')
     print(f"Starting marathon search for {DURATION_SECONDS} seconds...")
+    client.store_memory(f"[Node: {node_id}] Marathon Search Starting (4h Duration).", "strategy")
     
     while time.time() - start_time < DURATION_SECONDS:
-        # Sample parameters
-        n_groups = random.choice([8, 10, 16, 20, 32])
-        offset = random.choice([1, 2, 4])
-        alu_vecs = random.choice([0, 2, 4, 8, 12, 16])
+        now = time.time()
+        # 1. Heartbeat every 30 mins
+        if now - last_heartbeat > 1800:
+            client.store_memory(f"[Node: {node_id}] Marathon Heartbeat. Uptime: {(now-start_time)/3600:.1f}h", "fact")
+            last_heartbeat = now
+
+        # 2. Strategy: Focus on legal sweet spot (80% weight on alu_vecs=0)
+        if random.random() < 0.8:
+            alu_vecs = 0
+            n_groups = random.choice([16, 32, 64, 128]) # Higher groups for better interleaving
+            offset = random.choice([1, 2, 4, 8])
+        else:
+            alu_vecs = random.choice([2, 4]) # Low ALU offload only
+            n_groups = random.choice([16, 32])
+            offset = random.choice([1, 2])
         
         print(f"Testing: groups={n_groups}, offset={offset}, alu_vecs={alu_vecs}")
-        
         cycles = run_iteration(n_groups, offset, alu_vecs)
         
         if cycles and cycles < best_cycles:
             best_cycles = cycles
             best_config = {"groups": n_groups, "offset": offset, "alu_vecs": alu_vecs}
             print(f"NEW BEST: {best_cycles} cycles with {best_config}")
-            
-            # Report progress to Penfield immediately
-            msg = f"[Node: {os.getenv('JULES_SESSION_ID', 'unknown')}] NEW BEST: {best_cycles} cycles. Config: {best_config}"
+            msg = f"[Node: {node_id}] NEW BEST: {best_cycles} cycles. Config: {best_config}"
             client.store_memory(msg, "insight", tags=["vliw", "marathon", "best"])
 
     print(f"Search complete. Final Best: {best_cycles} with {best_config}")
-    # Final high-importance report
-    final_msg = f"[Node: {os.getenv('JULES_SESSION_ID', 'unknown')}] MARATHON COMPLETE. Best Result: {best_cycles} cycles. Config: {json.dumps(best_config)}"
+    final_msg = f"[Node: {node_id}] MARATHON COMPLETE. Best Result: {best_cycles} cycles. Config: {json.dumps(best_config)}"
     client.store_memory(final_msg, "fact", tags=["vliw", "marathon", "result"], importance=0.9)
 
 if __name__ == "__main__":
