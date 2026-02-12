@@ -2,13 +2,11 @@
 # bootstrap_admiral.sh - Initialize Fleet Admiral Environment
 # Usage: bash bootstrap_admiral.sh
 
-echo "[BOOTSTRAP] Initializing Admiral V5 (Synapse Enabled)..."
+echo "[BOOTSTRAP] Initializing Admiral V15 (Industrial Swarm - Honest Edition)..."
 
 # 1. Install Dependencies
 echo "[BOOTSTRAP] Installing Python dependencies..."
-if ! python3 -c "import requests" 2>/dev/null; then
-    pip3 install requests
-fi
+pip3 install -q requests ortools
 
 # 2. Install REAL Jules CLI (Migration Path)
 echo "[BOOTSTRAP] Installing Jules CLI v0.1.42 (Linux AMD64)..."
