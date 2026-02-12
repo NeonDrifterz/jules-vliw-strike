@@ -44,7 +44,8 @@ def update_state(message, penfield=None):
     Update local state and sync with Penfield if connected.
     """
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    log_msg = f"[ADMIRAL] {timestamp} - {message}"
+    role = os.getenv("JULES_ROLE", "Admiral")
+    log_msg = f"[{role}] {timestamp} - {message}"
     
     # 1. Console
     print(log_msg)
@@ -61,11 +62,11 @@ def update_state(message, penfield=None):
     if penfield:
         try:
             # Only sync critical events to save API calls
-            if "started" in message.lower() or "finished" in message.lower() or "failed" in message.lower() or "pause" in message.lower():
+            if "started" in message.lower() or "finished" in message.lower() or "failed" in message.lower() or "pause" in message.lower() or "spawn" in message.lower():
                 penfield.store_memory(
                     content=message,
                     memory_type="fact", 
-                    tags=["admiral", "orchestration"],
+                    tags=["admiral", "orchestration", role.lower()],
                     importance=0.7
                 )
         except Exception as e:

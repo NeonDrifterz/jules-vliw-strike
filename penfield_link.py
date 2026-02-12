@@ -7,8 +7,9 @@ import requests
 class PenfieldClient:
     BASE_URL = "https://api.penfield.app/api/v2"
 
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, session_id=None):
         self.api_key = api_key or os.getenv("PENFIELD_API_KEY")
+        self.session_id = session_id or os.getenv("JULES_SESSION_ID", "UNKNOWN")
         if not self.api_key:
             raise ValueError("Penfield API Key is required. Set PENFIELD_API_KEY env var.")
         self.jwt_token = None
@@ -43,10 +44,13 @@ class PenfieldClient:
             raise
 
     def store_memory(self, content, memory_type="fact", tags=None, importance=0.5):
-        """Store a memory in Penfield."""
+        """Store a memory in Penfield with Identity Prefix."""
         url = f"{self.BASE_URL}/memories"
+        
+        # IDENTITY INJECTION: Prefix content with Session ID
+        identity_prefix = f"[Node: {self.session_id}]"
         payload = {
-            "content": content,
+            "content": f"{identity_prefix} {content}",
             "memory_type": memory_type,
             "tags": tags or [],
             "importance": importance

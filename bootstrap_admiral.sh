@@ -18,7 +18,13 @@ else
     echo "[BOOTSTRAP] PENFIELD_API_KEY detected. Synapse Link Active."
 fi
 
-# 3. Ensure Executable
+# 3. Identify Node
+if [ -z "$JULES_SESSION_ID" ]; then
+    export JULES_SESSION_ID=$(hostname)
+    echo "[BOOTSTRAP] Node ID set to: $JULES_SESSION_ID"
+fi
+
+# 4. Ensure Executable
 chmod +x fleet_admiral.py safe_run.sh stealth_run.sh jules
 
 # 4. Launch Admiral
