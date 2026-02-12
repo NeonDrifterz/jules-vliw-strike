@@ -61,7 +61,7 @@ class PenfieldClient:
 
     def search_memories(self, query, limit=5, source_type="memory"):
         """Search memories in Penfield."""
-        url = f"{self.BASE_URL}/search"
+        url = f"{self.BASE_URL}/search/hybrid"
         payload = {
             "query": query,
             "limit": limit,
