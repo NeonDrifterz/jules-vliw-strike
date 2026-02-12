@@ -11,9 +11,13 @@ MAX_WORKERS = 3
 
 def run_cmd(cmd):
     try:
+        print(f"[ADMIRAL] Executing: {cmd}")
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"[ADMIRAL] Command failed: {result.stderr.strip()}")
         return result.stdout.strip()
     except Exception as e:
+        print(f"[ADMIRAL] Exception during command: {str(e)}")
         return f"Error: {str(e)}"
 
 def get_active_sessions():
@@ -35,8 +39,21 @@ def parse_queue():
     return tasks
 
 def main():
-    print(f"[ADMIRAL] Fleet Admiral wake sequence initiated.")
+    # Setup internal logging
+    log_file = open("admiral_execution.log", "a", buffering=1)
+    import sys
+    sys.stdout = log_file
+    sys.stderr = log_file
     
+    print(f"\n[ADMIRAL] --- Fleet Admiral Wake Sequence: {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
+    
+    # Environment Check
+    jules_check = run_cmd("which jules")
+    if not jules_check:
+        print("[ADMIRAL] WARNING: 'jules' command not found in PATH.")
+    else:
+        print(f"[ADMIRAL] 'jules' found at: {jules_check}")
+
     while True:
         print(f"\n[ADMIRAL] Starting orchestration cycle: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         
