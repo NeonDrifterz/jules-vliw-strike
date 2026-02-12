@@ -21,6 +21,11 @@ try:
 except ImportError:
     PenfieldClient = None # Graceful degrade if module not found
 
+try:
+    from jules_core import JulesCore
+except ImportError:
+    JulesCore = None
+
 # --- Logic ---
 
 def load_tasks():
@@ -85,47 +90,32 @@ def check_process(pid):
 def run_task(task, penfield=None):
     cmd = task['Command']
     task_id = task['ID']
-    update_state(f"Spawning WORKER for task {task_id}: {cmd}", penfield)
+    update_state(f"Initiating recursive spawn for {task_id}: {cmd}", penfield)
     
     try:
-        # RECURSIVE SPAWN: Use 'jules remote new' to launch a worker node
-        # We must pass the PENFIELD_API_KEY to the worker so it can link back to the Hive Mind.
-        
-        # Construct the worker mission prompt
-        worker_mission = f"MISSION: WORKER {task_id}. 1) Export PENFIELD_API_KEY='{os.getenv('PENFIELD_API_KEY')}' 2) {cmd}"
-        
-        # Execute the jules command
-        # Note: We assume 'jules' is in the path or alias
-        spawn_cmd = [
-            "jules", "remote", "new", 
-            "--repo", "NeonDrifterz/jules-vliw-strike", 
-            worker_mission
-        ]
-        
-        # Capture the output to get the Session ID
-        result = subprocess.run(spawn_cmd, capture_output=True, text=True, check=True)
-        output = result.stdout.strip()
-        
-        # Parse Session ID from output (e.g., "Session ID: 12345...")
-        session_id = "UNKNOWN"
-        for line in output.split('\n'):
-            if "ID:" in line:
-                session_id = line.split("ID:")[1].strip()
-                break
-        
-        task['Status'] = 'RUNNING' # Or 'SPAWNED'
-        task['PID'] = session_id # Track Session ID instead of PID
-        task['LogPath'] = "remote_session" 
-        
-        update_state(f"Worker spawned. Session ID: {session_id}", penfield)
-        return task
+        # Use JulesCore for Hybrid CLI/API Spawning (Parity+)
+        if JulesCore:
+            core = JulesCore()
+            # Construct mission prompt
+            worker_mission = f"MISSION: WORKER {task_id}. 1) Export PENFIELD_API_KEY='{os.getenv('PENFIELD_API_KEY')}' 2) {cmd}"
+            
+            session_id = core.spawn(worker_mission)
+            
+            task['Status'] = 'RUNNING'
+            task['PID'] = session_id
+            task['LogPath'] = "remote_session"
+            
+            update_state(f"Recursive Worker Active. Session ID: {session_id}", penfield)
+            return task
+        else:
+            # Fallback to local execution if wrapper missing
+            update_state("JulesCore missing. Falling back to local execution.", penfield)
+            result = subprocess.run([STEALTH_RUN, cmd], capture_output=True, text=True, check=True)
+            task['Status'] = 'RUNNING'
+            return task
 
-    except subprocess.CalledProcessError as e:
-        update_state(f"Failed to spawn worker for {task_id}: {e.stderr}", penfield)
-        task['Status'] = 'FAILED'
-        return task
     except Exception as e:
-        update_state(f"Exception spawning worker {task_id}: {e}", penfield)
+        update_state(f"Recursive spawn failed for {task_id}: {e}", penfield)
         task['Status'] = 'FAILED'
         return task
 
