@@ -15,6 +15,29 @@ STATE_FILE = "CURRENT_STATE.md"
 STEALTH_RUN = "./stealth_run.sh"
 HEARTBEAT_FILE = ".heartbeat"
 
+# --- No-Sleep Protocol ---
+def active_sleep(seconds):
+    """
+    Simulate activity to prevent hypervisor from freezing the VM.
+    Tickles CPU, forces I/O, and flushes stdout.
+    """
+    target = time.time() + seconds
+    while time.time() < target:
+        # 1. CPU Tickle: Tiny calculation
+        _ = 2**10
+        
+        # 2. I/O Tickle: Sync filesystem (if on Linux)
+        try:
+            os.sync()
+        except AttributeError:
+            pass # os.sync not available on all platforms
+            
+        # 3. Terminal Tickle: Clear buffer
+        sys.stdout.flush()
+        
+        # 4. Low-latency sleep to avoid 100% CPU throttle
+        time.sleep(1)
+
 # --- Modules ---
 try:
     from penfield_link import PenfieldClient
@@ -139,12 +162,9 @@ def heartbeat_loop(penfield=None):
         # 2. Simulate CPU Activity
         h = hashlib.sha256(ts_str.encode()).hexdigest()
         
-        # Only log locally to reduce noise
-        # print(f"[HEARTBEAT] {ts_str} - Alive (Hash: {h[:8]})")
-        
-        # 3. Sleep & Detect VM Pauses
+        # 3. Active Wait & Detect VM Pauses
         sleep_duration = 60
-        time.sleep(sleep_duration)
+        active_sleep(sleep_duration)
         
         end_time = time.time()
         elapsed = end_time - start_time
@@ -168,7 +188,7 @@ def monitor_tasks(keep_alive=False, penfield=None):
         try:
             tasks = load_tasks()
             if not tasks:
-                time.sleep(5)
+                active_sleep(5)
                 continue
             
             active_task_idx = -1
@@ -214,7 +234,7 @@ def monitor_tasks(keep_alive=False, penfield=None):
         except Exception as e:
             update_state(f"Error in monitoring loop: {e}", penfield)
         
-        time.sleep(5) # Poll every 5 seconds
+        active_sleep(5) # Poll every 5 seconds using active wait
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fleet Admiral Orchestrator")

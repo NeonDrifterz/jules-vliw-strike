@@ -35,6 +35,6 @@ fi
 chmod +x fleet_admiral.py safe_run.sh stealth_run.sh jules_core.py
 
 # 6. Launch Admiral
-echo "[BOOTSTRAP] Launching Fleet Admiral..."
-python3 fleet_admiral.py --keep-alive --penfield-sync
+echo "[BOOTSTRAP] Launching Fleet Admiral (Unbuffered)..."
+python3 -u fleet_admiral.py --keep-alive --penfield-sync
 
