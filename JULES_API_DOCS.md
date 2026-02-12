@@ -16,7 +16,7 @@ All requests require the following header:
 **Payload:**
 ```json
 {
-  "repo": "NeonDrifterz/jules-vliw-strike",
+  "repo": "sources/github/NeonDrifterz/jules-vliw-strike",
   "mission": "MISSION: [Task Name]. 1) [Instructions] 2) [Command]"
 }
 ```

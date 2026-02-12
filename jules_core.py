@@ -21,14 +21,16 @@ class JulesCore:
         response.raise_for_status()
         return response.json()
 
-    def spawn(self, mission, repo="NeonDrifterz/jules-vliw-strike"):
+    def spawn(self, mission, repo="sources/github/NeonDrifterz/jules-vliw-strike"):
         """
         PARITY+: Create session via CLI, then immediately approve plan via API.
         """
         print(f"[JulesCore] Spawning session for: {mission[:50]}...")
         
         # 1. Create via CLI (Superior repo/context handling)
-        cmd = ["jules", "remote", "new", "--repo", repo, "--session", mission]
+        # Note: CLI repo format usually differs from REST source ID
+        cli_repo = repo.replace("sources/github/", "")
+        cmd = ["jules", "remote", "new", "--repo", cli_repo, "--session", mission]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
         # Extract ID from CLI output
