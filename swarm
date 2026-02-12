@@ -1,0 +1,3 @@
+#!/bin/bash
+# Wrapper for Swarm Commander
+python3 swarm_tools/commander.py "$@"

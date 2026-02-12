@@ -33,8 +33,7 @@ class JulesCore:
         
         # Extract ID from CLI output
         session_id = None
-        for line in result.stdout.split('
-'):
+        for line in result.stdout.split('\n'):
             if "ID:" in line:
                 session_id = line.split("ID:")[1].strip()
                 break
