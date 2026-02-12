@@ -25,6 +25,12 @@ else
     echo "[BOOTSTRAP] PENFIELD_API_KEY detected. Synapse Link Active."
 fi
 
+if [ -z "$JULES_API_KEY" ]; then
+    echo "[BOOTSTRAP] WARNING: JULES_API_KEY not set. Recursive spawning will fail."
+else
+    echo "[BOOTSTRAP] JULES_API_KEY detected. Reproductive Power Armed."
+fi
+
 # 4. Identify Node
 if [ -z "$JULES_SESSION_ID" ]; then
     export JULES_SESSION_ID=$(hostname)

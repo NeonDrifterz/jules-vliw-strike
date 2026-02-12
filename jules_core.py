@@ -30,7 +30,7 @@ class JulesCore:
         # 1. Create via CLI (Superior repo/context handling)
         # Note: CLI repo format usually differs from REST source ID
         cli_repo = repo.replace("sources/github/", "")
-        cmd = ["jules", "remote", "new", "--repo", cli_repo, "--session", mission]
+        cmd = ["./jules", "remote", "new", "--repo", cli_repo, "--session", mission]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
         # Extract ID from CLI output

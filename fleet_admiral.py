@@ -119,8 +119,15 @@ def run_task(task, penfield=None):
         # Use JulesCore for Hybrid CLI/API Spawning (Parity+)
         if JulesCore:
             core = JulesCore()
-            # Construct mission prompt
-            worker_mission = f"MISSION: WORKER {task_id}. 1) Export PENFIELD_API_KEY='{os.getenv('PENFIELD_API_KEY')}' 2) {cmd}"
+            # Construct mission prompt (Hardened)
+            worker_mission = (
+                f"MISSION: BENCHMARK RUNNER {task_id}.\n"
+                f"1) DO NOT modify the codebase. You are a runner, not a developer.\n"
+                f"2) Export PENFIELD_API_KEY='{os.getenv('PENFIELD_API_KEY')}'\n"
+                f"3) Run the following command exactly: {cmd}\n"
+                f"4) REPORT the final cycle count to Penfield memory using penfield_link.py.\n"
+                f"5) Terminate immediately after reporting. DO NOT submit a PR."
+            )
             
             session_id = core.spawn(worker_mission)
             
