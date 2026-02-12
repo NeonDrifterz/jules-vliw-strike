@@ -83,35 +83,48 @@ def check_process(pid):
 
 def run_task(task, penfield=None):
     cmd = task['Command']
-    update_state(f"Starting task {task['ID']}: {cmd}", penfield)
+    task_id = task['ID']
+    update_state(f"Spawning WORKER for task {task_id}: {cmd}", penfield)
     
     try:
-        # Run stealth_run.sh and capture output to get PID
-        result = subprocess.run([STEALTH_RUN, cmd], capture_output=True, text=True, check=True)
+        # RECURSIVE SPAWN: Use 'jules remote new' to launch a worker node
+        # We must pass the PENFIELD_API_KEY to the worker so it can link back to the Hive Mind.
+        
+        # Construct the worker mission prompt
+        worker_mission = f"MISSION: WORKER {task_id}. 1) Export PENFIELD_API_KEY='{os.getenv('PENFIELD_API_KEY')}' 2) {cmd}"
+        
+        # Execute the jules command
+        # Note: We assume 'jules' is in the path or alias
+        spawn_cmd = [
+            "jules", "remote", "new", 
+            "--repo", "NeonDrifterz/jules-vliw-strike", 
+            worker_mission
+        ]
+        
+        # Capture the output to get the Session ID
+        result = subprocess.run(spawn_cmd, capture_output=True, text=True, check=True)
         output = result.stdout.strip()
         
-        pid = ""
-        # Expected: "Stealth mode engaged. PID: 1234. Log: logs/stealth_last.log"
-        if "PID:" in output:
-            parts = output.split()
-            for i, part in enumerate(parts):
-                if part == "PID:":
-                    # Remove trailing punctuation like '.'
-                    pid = parts[i+1].rstrip('.')
-                    break
+        # Parse Session ID from output (e.g., "Session ID: 12345...")
+        session_id = "UNKNOWN"
+        for line in output.split('\n'):
+            if "ID:" in line:
+                session_id = line.split("ID:")[1].strip()
+                break
         
-        task['Status'] = 'RUNNING'
-        task['PID'] = pid
-        task['LogPath'] = "logs/stealth_last.log" 
+        task['Status'] = 'RUNNING' # Or 'SPAWNED'
+        task['PID'] = session_id # Track Session ID instead of PID
+        task['LogPath'] = "remote_session" 
         
-        update_state(f"Task {task['ID']} running (PID {pid}).", penfield)
+        update_state(f"Worker spawned. Session ID: {session_id}", penfield)
         return task
+
     except subprocess.CalledProcessError as e:
-        update_state(f"Failed to start task {task['ID']}: {e.stderr}", penfield)
+        update_state(f"Failed to spawn worker for {task_id}: {e.stderr}", penfield)
         task['Status'] = 'FAILED'
         return task
     except Exception as e:
-        update_state(f"Exception starting task {task['ID']}: {e}", penfield)
+        update_state(f"Exception spawning worker {task_id}: {e}", penfield)
         task['Status'] = 'FAILED'
         return task
 
