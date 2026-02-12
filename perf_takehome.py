@@ -4,7 +4,7 @@ V3 Architecture: Deferred critical-path scheduler with L0-L3 precomputation (127
 RESULTS: 1271 cycles (beats 1338 leaderboard target by 67 cycles / 5.0%)
 
 Key optimizations:
-1. Multi-phase interleaving: 16 groups x 2 vectors, offset by 1 round
+1. Multi-phase interleaving: 16 groups × 2 vectors, offset by 1 round
 2. Deferred critical-path scheduler with iterative refinement (100 iterations) + CP-SAT tail refinement
 3. L0-L3 precomputation: Load tree levels 0-3 once, use vselect/mux
 4. VALU/ALU balance: Direction extraction + L1-L3 subtract in scalar ALU
@@ -343,7 +343,6 @@ class SemanticScheduler:
         return self._add_raw("valu", (op, dest.addr, a.addr, b.addr), [a, b], [dest])
     def vbroadcast(self, dest: VectorReg, src: ScalarReg): return self._add_raw("valu", ("vbroadcast", dest.addr, src.addr), [src], [dest])
     def vselect(self, dest: VectorReg, cond: VectorReg, a: VectorReg, b: VectorReg): return self._add_raw("flow", ("vselect", dest.addr, cond.addr, a.addr, b.addr), [cond, a, b], [dest])
-    def store(self, addr: ScalarReg, src: ScalarReg): return self._add_raw("store", ("store", addr.addr, src.addr), [addr, src], [])
 
 
 class KernelBuilder:
@@ -372,9 +371,10 @@ class KernelBuilder:
 
     def debug_info(self): return DebugInfo(scratch_map=self.scratch_debug)
 
-    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int, n_groups: int = 16, offset: int = 1):
+    def build_kernel(self, forest_height: int, n_nodes: int, batch_size: int, rounds: int):
         S = self.sched
-        # n_groups and offset passed as arguments
+        n_groups = 16
+        offset = 1
 
         # ── Load parameters ──
         params = [self.alloc_scalar(name) for name in ["rds", "nn", "bs", "fh", "fp", "ip", "vp"]]
@@ -384,27 +384,21 @@ class KernelBuilder:
         s_fp, s_ip, s_vp, s_nn = params[4], params[5], params[6], params[1]
 
         n_vecs = batch_size // VLEN  # 32
-        n_valu_vecs = 32
-        n_alu_vecs = 0
 
-        # ── Heterogeneous Register Partition (32 VALU, 0 ALU) ──
-        v_idx = [self.alloc_vector(f"idx_{i}") for i in range(n_valu_vecs)]
-        v_val = [self.alloc_vector(f"val_{i}") for i in range(n_valu_vecs)]
-        v_t1  = [self.alloc_vector(f"t1_{i}") for i in range(n_valu_vecs)]
-        v_t2  = [self.alloc_vector(f"t2_{i}") for i in range(n_valu_vecs)]
-
-        # Scalar registers for the Colonized 8 vectors
-        a_idx = [[self.alloc_scalar(f"aidx_{i}_{v}") for v in range(VLEN)] for i in range(n_alu_vecs)]
-        a_val = [[self.alloc_scalar(f"aval_{i}_{v}") for v in range(VLEN)] for i in range(n_alu_vecs)]
-        a_t1  = [[self.alloc_scalar(f"at1_{i}_{v}") for v in range(VLEN)] for i in range(n_alu_vecs)]
-        a_t2  = [[self.alloc_scalar(f"at2_{i}_{v}") for v in range(VLEN)] for i in range(n_alu_vecs)]
+        # ── Vector registers for ALL 32 vectors ──
+        v_idx = [self.alloc_vector(f"idx_{i}") for i in range(n_vecs)]
+        v_val = [self.alloc_vector(f"val_{i}") for i in range(n_vecs)]
+        v_t1  = [self.alloc_vector(f"t1_{i}") for i in range(n_vecs)]
+        v_t2  = [self.alloc_vector(f"t2_{i}") for i in range(n_vecs)]
 
         # ── Vector constants ──
         v_o   = self.alloc_vector("v_o")
         v_two = self.alloc_vector("v_two")
+        v_four = self.alloc_vector("v_four")
         v_vn  = self.alloc_vector("v_vn")
         S.vbroadcast(v_o, self.get_const(1))
         S.vbroadcast(v_two, self.get_const(2))
+        S.vbroadcast(v_four, self.get_const(4))
         S.vbroadcast(v_vn, s_nn)
 
         # ── Hash constant vectors ──
@@ -416,15 +410,6 @@ class KernelBuilder:
             S.vbroadcast(v_h3[i], self.get_const(v3))
             if i in v_hm:
                 S.vbroadcast(v_hm[i], self.get_const({0: 4097, 2: 33, 4: 9}[i]))
-        
-        # Fused S2+S3 constants
-        k2, k3 = 0x165667B1, 0xD3A2646C
-        v_k2_prime = self.alloc_vector("k2_prime")
-        v_k3_shifted_neg = self.alloc_vector("k3_shifted_neg")
-        v_512 = self.alloc_vector("v_512")
-        S.vbroadcast(v_k2_prime, self.get_const((k2 + k3) % (2**32)))
-        S.vbroadcast(v_k3_shifted_neg, self.get_const((-(k3 << 9)) % (2**32)))
-        S.vbroadcast(v_512, self.get_const(512))
 
         # ── Preload L0-L2 node values as scalars ──
         s_na = self.alloc_scalar("na")
@@ -462,150 +447,129 @@ class KernelBuilder:
 
         # ── Misc ──
         v_seven = self.alloc_vector("v_seven")
-        v_three = self.alloc_vector("v_three")
-        v_fp_b  = self.alloc_vector("v_fp_b")
         v_root  = self.alloc_vector("v_root")
         S.vbroadcast(v_seven, self.get_const(7))
-        S.vbroadcast(v_three, self.get_const(3))
-        S.vbroadcast(v_fp_b, s_fp)
         S.vbroadcast(v_root, s_tree[0])
 
         s_c1 = self.get_const(1)
 
         print(f"Scratch usage: {self.scratch_ptr}/{SCRATCH_SIZE} ({SCRATCH_SIZE - self.scratch_ptr} free)")
 
-        # ── Load initial values (24 VALU, 8 ALU) ──
+        # ── Load initial values for all 32 vectors ──
         s_sp_reg = self.alloc_scalar("sp")
-        tmp_va = self.alloc_scalar("tmp_va")
-        for i in range(n_valu_vecs):
+        for i in range(n_vecs):
             S.alu("+", s_sp_reg, s_vp, self.get_const(i * VLEN))
             S.vload(v_val[i], s_sp_reg)
             S.vbroadcast(v_idx[i], self.get_const(0))
-        for i in range(n_alu_vecs):
-            S.alu("+", s_sp_reg, s_vp, self.get_const((n_valu_vecs + i) * VLEN))
-            for v in range(VLEN):
-                S.alu("+", tmp_va, s_sp_reg, self.get_const(v))
-                S.load(a_val[i][v], tmp_va)
-                S.alu("*", a_idx[i][v], s_c1, self.get_const(0))
 
         # ─────────────────────────────────────────────────────
-        def emit_fetch_valu(r, vecs):
-            """VALU Fetch logic (optimized L0-L3)"""
+        def emit_fetch(r, vecs):
+            """Emit node value fetch for a round"""
             level = r % (forest_height + 1)
-            if not vecs: return
             if level == 0:
-                for i in vecs: S.valu("^", v_val[i], v_val[i], v_root)
+                for i in vecs:
+                    S.valu("^", v_val[i], v_val[i], v_root)
             elif level == 1:
                 for i in vecs:
-                    S.valu("-", v_t1[i], v_idx[i], v_o)
+                    for vi in range(VLEN):
+                        si = ScalarReg(v_idx[i].addr + vi, "")
+                        sd = ScalarReg(v_t1[i].addr + vi, "")
+                        S.alu("-", sd, si, s_c1)
                     S.vselect(v_t2[i], v_t1[i], v_l1[1], v_l1[0])
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 2:
+                s_c3 = self.get_const(3)
                 for i in vecs:
-                    S.valu("-", v_t1[i], v_idx[i], v_three)
+                    for vi in range(VLEN):
+                        si = ScalarReg(v_idx[i].addr + vi, "")
+                        sd = ScalarReg(v_t1[i].addr + vi, "")
+                        S.alu("-", sd, si, s_c3)
                 for i in vecs:
                     S.valu("&", v_cond, v_t1[i], v_o)
                     S.vselect(v_sel0, v_cond, v_l2[1], v_l2[0])
                     S.vselect(v_sel1, v_cond, v_l2[3], v_l2[2])
-                    S.valu("&", v_t2[i], v_t1[i], v_o) # Revert to & 1 if it was intended? No, L2 bit 1.
-                    # Original for L2 bit 1:
-                    S.valu(">>", v_t2[i], v_t1[i], v_o)
-                    S.valu("&", v_t2[i], v_t2[i], v_o)
-                    S.vselect(v_t2[i], v_t2[i], v_sel1, v_sel0)
+                    # Shift elimination: select upper half based on bit 1 (mask 2)
+                    S.valu("&", v_cond, v_t1[i], v_two)
+                    S.vselect(v_t2[i], v_cond, v_sel1, v_sel0)
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             elif level == 3:
-                for i in vecs: S.valu("-", v_t1[i], v_idx[i], v_seven)
+                for i in vecs:
+                    S.valu("-", v_t1[i], v_idx[i], v_seven)
                 for i in vecs:
                     S.valu("&", v_cond, v_t1[i], v_o)
-                    S.vselect(v_sel0, v_cond, v_l3[1], v_l3[0]); S.vselect(v_sel1, v_cond, v_l3[3], v_l3[2])
-                    S.vselect(v_sel2, v_cond, v_l3[5], v_l3[4]); S.vselect(v_sel3, v_cond, v_l3[7], v_l3[6])
-                    S.valu(">>", v_t2[i], v_t1[i], v_o); S.valu("&", v_cond, v_t2[i], v_o)
-                    S.vselect(v_sel0, v_cond, v_sel1, v_sel0); S.vselect(v_sel2, v_cond, v_sel3, v_sel2)
-                    S.valu(">>", v_t2[i], v_t1[i], v_two); S.vselect(v_t2[i], v_t2[i], v_sel2, v_sel0)
+                    S.vselect(v_sel0, v_cond, v_l3[1], v_l3[0])
+                    S.vselect(v_sel1, v_cond, v_l3[3], v_l3[2])
+                    S.vselect(v_sel2, v_cond, v_l3[5], v_l3[4])
+                    S.vselect(v_sel3, v_cond, v_l3[7], v_l3[6])
+                    # Shift elimination: select layer 2 based on bit 1 (mask 2)
+                    S.valu("&", v_cond, v_t1[i], v_two)
+                    S.vselect(v_sel0, v_cond, v_sel1, v_sel0)
+                    S.vselect(v_sel2, v_cond, v_sel3, v_sel2)
+                    # Shift elimination: select final based on bit 2 (mask 4)
+                    S.valu("&", v_cond, v_t1[i], v_four)
+                    S.vselect(v_t2[i], v_cond, v_sel2, v_sel0)
                     S.valu("^", v_val[i], v_val[i], v_t2[i])
             else:
                 for i in vecs:
-                    S.valu("+", v_t1[i], v_idx[i], v_fp_b)
                     for vi in range(VLEN):
-                        lp, ln = ScalarReg(v_t1[i].addr+vi, ""), ScalarReg(v_t2[i].addr+vi, "")
+                        lp = ScalarReg(v_t1[i].addr + vi, "")
+                        ln = ScalarReg(v_t2[i].addr + vi, "")
+                        li = ScalarReg(v_idx[i].addr + vi, "")
+                        S.alu("+", lp, s_fp, li)
                         S.load(ln, lp)
                 for i in vecs:
-                    S.valu("^", v_val[i], v_val[i], v_t2[i])
+                    for vi in range(VLEN):
+                        sv = ScalarReg(v_val[i].addr + vi, "")
+                        sn = ScalarReg(v_t2[i].addr + vi, "")
+                        S.alu("^", sv, sv, sn)
 
-        def emit_fetch_alu(r, vecs):
-            """Scalar ALU Fetch logic (for colonized 8 vectors)"""
-            if not vecs: return
-            for i in vecs:
-                for v in range(VLEN):
-                    lp, ln, li = a_t1[i][v], a_t2[i][v], a_idx[i][v]
-                    S.alu("+", lp, s_fp, li); S.load(ln, lp); S.alu("^", a_val[i][v], a_val[i][v], ln)
-
-        def emit_hash_valu(r, vecs):
-            """VALU Hash logic"""
+        def emit_hash(r, vecs):
+            """Emit hash + direction + index update for a round"""
             level = r % (forest_height + 1)
-            if not vecs: return
             for i in vecs:
-                # S0
-                S.valu("multiply_add", v_val[i], v_val[i], v_hm[0], v_h1[0])
-                # S1
-                S.valu("xor_shift_xor", v_val[i], v_val[i], v_h1[1], v_h3[1])
-                # S2+S3 Fused
-                S.valu("multiply_add", v_t1[i], v_val[i], v_hm[2], v_k2_prime)
-                S.valu("xor_madd", v_val[i], v_t1[i], v_512, v_k3_shifted_neg)
-                # S4
-                S.valu("multiply_add", v_val[i], v_val[i], v_hm[4], v_h1[4])
-                # S5
-                S.valu("xor_shift_xor", v_val[i], v_val[i], v_h1[5], v_h3[5])
+                for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
+                    if hi in [0, 2, 4]:
+                        S.valu("multiply_add", v_val[i], v_val[i], v_hm[hi], v_h1[hi])
+                    elif hi == 1 and i % 32 == 0:
+                        # Micro-optimization: Offload Stage 1 to scalar ALU for just 1 vector
+                        # This balances the very last bit of VALU saturation (~1260 cycles regime)
+                        c1 = self.get_const(HASH_STAGES[hi][1])
+                        c3 = self.get_const(HASH_STAGES[hi][4])
+                        for vi in range(VLEN):
+                            sv = ScalarReg(v_val[i].addr + vi, "")
+                            st1 = ScalarReg(v_t1[i].addr + vi, "")
+                            st2 = ScalarReg(v_t2[i].addr + vi, "")
+                            S.alu(op1, st1, sv, c1)
+                            S.alu(op3, st2, sv, c3)
+                            S.alu(op2, sv, st1, st2)
+                    else:
+                        S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
+                        S.valu(op3, v_t2[i], v_val[i], v_h3[hi])
+                        S.valu(op2, v_val[i], v_t1[i], v_t2[i])
+                
                 if level == forest_height:
-                    S.valu("update_idx", v_idx[i], v_idx[i], v_val[i], v_vn)
+                    # At the last level, idx is guaranteed to go out of bounds (>= n_nodes)
+                    # because 2*idx + dir is > idx, and idx is a leaf.
+                    # So we can just reset it to 0.
+                    # We use Scalar ALU to save VALU slots (VALU is bottleneck).
+                    # We have saved >1000 ALU ops by removing direction calc, so we have headroom.
+                    s_zero = self.get_const(0)
+                    for vi in range(VLEN):
+                        si = ScalarReg(v_idx[i].addr + vi, "")
+                        S.alu("&", si, si, s_zero)
                 else:
-                    S.valu("update_idx", v_idx[i], v_idx[i], v_val[i])
-
-        def emit_hash_alu(r, vecs):
-            """Scalar ALU Hash logic (Fused S2+S3)"""
-            level = r % (forest_height + 1)
-            if not vecs: return
-            for i in vecs:
-                for v in range(VLEN):
-                    sv, si = a_val[i][v], a_idx[i][v]
-                    at1, at2 = a_t1[i][v], a_t2[i][v]
-                    # S0
-                    S.alu("+", at1, sv, self.get_const(0x7ED55D16))
-                    S.alu("*", sv, sv, self.get_const(4097)); S.alu("+", sv, sv, self.get_const(0x7ED55D16))
-                    # S1
-                    S.alu("^", at1, sv, self.get_const(0xC761C23C))
-                    S.alu(">>", at2, sv, self.get_const(19))
-                    S.alu("^", sv, at1, at2)
-                    # S2+S3 Fused
-                    # t1 = a * 33 + K2_prime
-                    # t2 = t1 * 512 + K3_shifted_neg
-                    # a = t1 ^ t2
-                    k2, k3 = 0x165667B1, 0xD3A2646C
-                    k2_prime = (k2 + k3) % (2**32)
-                    k3_shifted_neg = (-(k3 << 9)) % (2**32)
-                    S.alu("*", at1, sv, self.get_const(33)); S.alu("+", at1, at1, self.get_const(k2_prime))
-                    S.alu("*", at2, at1, self.get_const(512)); S.alu("+", at2, at2, self.get_const(k3_shifted_neg))
-                    S.alu("^", sv, at1, at2)
-                    # S4
-                    S.alu("*", at1, sv, self.get_const(9)); S.alu("+", sv, at1, self.get_const(0xFD7046C5))
-                    # S5
-                    S.alu("^", at1, sv, self.get_const(0xB55A4F09))
-                    S.alu(">>", at2, sv, self.get_const(16))
-                    S.alu("^", sv, at1, at2)
-                    
-                    S.alu("&", at1, sv, s_c1); S.alu("+", at1, at1, s_c1)
-                    S.alu("*", si, si, self.get_const(2)); S.alu("+", si, si, at1)
-                    if level == forest_height:
-                        S.alu("<", at1, si, s_nn); S.alu("*", si, si, at1)
+                    for vi in range(VLEN):
+                        sv = ScalarReg(v_val[i].addr + vi, "")
+                        sd = ScalarReg(v_t1[i].addr + vi, "")
+                        S.alu("&", sd, sv, s_c1)
+                        S.alu("+", sd, sd, s_c1)  # direction + 1
+                    S.valu("multiply_add", v_idx[i], v_idx[i], v_two, v_t1[i])  # idx*2 + (dir+1)
 
         # ─────────────────────────────────────────────────────
         # Multi-phase interleaved execution
         # ─────────────────────────────────────────────────────
-        groups_valu = [[] for _ in range(n_groups)]
-        for i in range(n_valu_vecs): groups_valu[i % n_groups].append(i)
-        groups_alu = [[] for _ in range(n_groups)]
-        for i in range(n_alu_vecs): groups_alu[i % n_groups].append(i)
-        
+        group_size = n_vecs // n_groups
+        groups = [list(range(g * group_size, (g + 1) * group_size)) for g in range(n_groups)]
         group_offsets = [g * offset for g in range(n_groups)]
         max_offset = max(group_offsets)
 
@@ -613,36 +577,33 @@ class KernelBuilder:
             active = []
             for g in range(n_groups):
                 r = step - group_offsets[g]
-                if 0 <= r < rounds: active.append((g, r))
-            if step % 2 == 1: active = active[::-1]
+                if 0 <= r < rounds:
+                    active.append((g, r))
+            if step % 2 == 1:
+                active = active[::-1]
             for g, r in active:
-                emit_fetch_valu(r, groups_valu[g]); emit_fetch_alu(r, groups_alu[g])
-                emit_hash_valu(r, groups_valu[g]); emit_hash_alu(r, groups_alu[g])
+                emit_fetch(r, groups[g])
+                emit_hash(r, groups[g])
 
-        # ── Store results (24 VALU, 8 ALU) ──
-        for i in range(n_valu_vecs):
-            S.alu("+", s_sp_reg, s_ip, self.get_const(i * VLEN)); S.vstore(s_sp_reg, v_idx[i])
-            S.alu("+", s_sp_reg, s_vp, self.get_const(i * VLEN)); S.vstore(s_sp_reg, v_val[i])
-        for i in range(n_alu_vecs):
-            S.alu("+", s_sp_reg, s_ip, self.get_const((n_valu_vecs+i) * VLEN))
-            for v in range(VLEN):
-                S.alu("+", tmp_va, s_sp_reg, self.get_const(v)); S.store(tmp_va, a_idx[i][v])
-            S.alu("+", s_sp_reg, s_vp, self.get_const((n_valu_vecs+i) * VLEN))
-            for v in range(VLEN):
-                S.alu("+", tmp_va, s_sp_reg, self.get_const(v)); S.store(tmp_va, a_val[i][v])
+        # ── Store results ──
+        for i in range(n_vecs):
+            S.alu("+", s_sp_reg, s_ip, self.get_const(i * VLEN))
+            S.vstore(s_sp_reg, v_idx[i])
+            S.alu("+", s_sp_reg, s_vp, self.get_const(i * VLEN))
+            S.vstore(s_sp_reg, v_val[i])
 
         S.pause(n_iters=100)
         S.print_heatmap()
         self.instrs = S.bundles
 
 
-def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123, n_groups: int = 16, offset: int = 1):
+def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int = 123):
     random.seed(seed)
     forest = Tree.generate(forest_height)
     inp = Input.generate(forest, batch_size, rounds)
-    mem = build_mem_image(forest, inp, generate_lut=False)
+    mem = build_mem_image(forest, inp)
     kb = KernelBuilder()
-    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds, n_groups, offset)
+    kb.build_kernel(forest.height, len(forest.values), len(inp.indices), rounds)
     machine = Machine(mem, kb.instrs, kb.debug_info(), n_cores=N_CORES)
     machine.run()
     ref_mem = list(mem)
@@ -650,18 +611,13 @@ def do_kernel_test(forest_height: int, rounds: int, batch_size: int, seed: int =
     ivp, iip = ref_mem[6], ref_mem[5]
     assert machine.mem[ivp : ivp + batch_size] == ref_mem[ivp : ivp + batch_size], "VALUES MISMATCH"
     assert machine.mem[iip : iip + batch_size] == ref_mem[iip : iip + batch_size], "INDICES MISMATCH"
-    
-    kb.sched.print_heatmap()
-    total_valu = sum(len(b.get("valu", [])) for b in kb.instrs)
-    total_alu = sum(len(b.get("alu", [])) for b in kb.instrs)
-    print(f"📊 Stats: VALU={total_valu} ops, ALU={total_alu} ops")
     print(f"✅ {machine.cycle} cycles")
     return machine.cycle
 
 
 class Tests(unittest.TestCase):
     def test_kernel_cycles(self):
-        cycles = do_kernel_test(10, 16, 256, n_groups=32, offset=1)
+        cycles = do_kernel_test(10, 16, 256)
         assert cycles < 2500, f"Expected < 2500, got {cycles}"
 
 
