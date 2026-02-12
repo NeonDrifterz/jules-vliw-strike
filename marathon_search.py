@@ -32,34 +32,61 @@ def run_iteration(n_groups, offset, alu_vecs):
         print(f"Iteration failed: {e}")
     return None
 
+def get_external_time():
+    """Fetch UTC seconds from an external source."""
+    try:
+        import requests
+        res = requests.get("https://worldtimeapi.org/api/timezone/Etc/UTC", timeout=15)
+        if res.status_code == 200:
+            return res.json().get("unixtime")
+    except Exception:
+        pass
+    return None
+
 def main():
     client = PenfieldClient()
-    start_time = time.time()
-    last_heartbeat = start_time
+    
+    start_wall = get_external_time() or time.time()
+    start_cpu = time.time()
+    last_heartbeat = start_cpu
+    
     best_cycles = float('inf')
     best_config = {}
     
     node_id = os.getenv('JULES_SESSION_ID', 'unknown')
-    print(f"Starting Industrial Marathon Search for {DURATION_SECONDS} seconds...")
+    print(f"Starting Chronos-Aware Marathon Search...")
     print(f"Node ID: {node_id}")
+    print(f"Start Wall-Clock: {start_wall}")
     sys.stdout.flush()
     
-    client.store_memory(f"[Node: {node_id}] Industrial Marathon Search Starting (4h Duration).", "strategy")
+    client.store_memory(f"[Node: {node_id}] Chronos Marathon Starting (4h Wall-Clock Duration).", "strategy")
     
-    # BLOCKING FOREGROUND LOOP
-    while time.time() - start_time < DURATION_SECONDS:
-        now = time.time()
-        # 1. Heartbeat every 15 mins (more frequent to prevent suspension)
-        if now - last_heartbeat > 900:
-            client.store_memory(f"[Node: {node_id}] Marathon Heartbeat. Uptime: {(now-start_time)/3600:.1f}h", "fact")
-            last_heartbeat = now
-            print(f"Heartbeat sent. Uptime: {(now-start_time)/3600:.1f}h")
+    # 4-HOUR WALL-CLOCK LOOP
+    while True:
+        now_wall = get_external_time() or (start_wall + (time.time() - start_cpu))
+        elapsed_wall = now_wall - start_wall
+        
+        if elapsed_wall >= DURATION_SECONDS:
+            break
+
+        now_cpu = time.time()
+        # 1. Heartbeat & Pause Detection
+        if now_cpu - last_heartbeat > 900:
+            pause_duration = elapsed_wall - (now_cpu - start_cpu)
+            msg = (
+                f"[Node: {node_id}] Marathon Heartbeat | "
+                f"Elapsed: {elapsed_wall/3600:.2f}h / 4.0h | "
+                f"Pause Tax: {pause_duration:.1f}s"
+            )
+            client.store_memory(msg, "fact")
+            print(msg)
+            last_heartbeat = now_cpu
             sys.stdout.flush()
 
         # 2. Strategy: Focus on legal sweet spot
         if random.random() < 0.8:
             alu_vecs = 0
-            n_groups = random.choice([8, 16, 20, 32, 64])
+            n_groups = random.choice([8, 16, 20, 32, 64, 128])
             offset = random.choice([1, 2, 4])
         else:
             alu_vecs = random.choice([2, 4])
