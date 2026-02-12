@@ -23,33 +23,41 @@ class JulesCore:
 
     def spawn(self, mission, repo="sources/github/NeonDrifterz/jules-vliw-strike"):
         """
-        PARITY+: Create session via CLI, then immediately approve plan via API.
+        RECURSIVE+: Create session via direct REST API and approve it.
+        Bypasses the CLI to avoid pathing/parsing issues.
         """
-        print(f"[JulesCore] Spawning session for: {mission[:50]}...")
+        print(f"[JulesCore] Spawning session (REST) for: {mission[:50]}...")
         
-        # 1. Create via CLI (Superior repo/context handling)
-        # Note: CLI repo format usually differs from REST source ID
-        cli_repo = repo.replace("sources/github/", "")
-        cmd = ["./jules", "remote", "new", "--repo", cli_repo, "--session", mission]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        # 1. Create Session via REST API
+        payload = {
+            "repo": repo,
+            "mission": mission
+        }
         
-        # Extract ID from CLI output
-        session_id = None
-        for line in result.stdout.split('\n'):
-            if "ID:" in line:
-                session_id = line.split("ID:")[1].strip()
-                break
-        
-        if not session_id:
-            raise Exception(f"Failed to extract session ID from CLI output: {result.stdout}")
+        try:
+            session_data = self._api_post("sessions", payload)
+            # The 'name' field in the response is the session ID (e.g., "sessions/123...")
+            # We strip the "sessions/" prefix for internal consistency if needed
+            session_full_name = session_data.get("name")
+            session_id = session_full_name.split("/")[-1]
+            print(f"[JulesCore] Session {session_id} created via REST.")
+        except Exception as e:
+            raise Exception(f"REST Spawn failed: {e}")
 
         # 2. Wait for 'Awaiting Approval' state
-        print(f"[JulesCore] Session {session_id} created. Polling for Plan A...")
-        time.sleep(10) # Initial grace period
+        # The API is fast, but the backend needs a moment to initialize the plan
+        print(f"[JulesCore] Polling for Plan A...")
+        time.sleep(15) 
         
-        # 3. Approve via API (Bypasses the 'Recursion Wall')
+        # 3. Approve via API
         print(f"[JulesCore] Approving Plan for {session_id}...")
-        self._api_post(f"sessions/{session_id}:approvePlan")
+        try:
+            self._api_post(f"sessions/{session_id}:approvePlan")
+        except Exception as e:
+            # If it fails, maybe it's not ready yet. One retry.
+            print(f"[JulesCore] Approval failed, retrying in 10s: {e}")
+            time.sleep(10)
+            self._api_post(f"sessions/{session_id}:approvePlan")
         
         print(f"[JulesCore] SUCCESS: Session {session_id} is now executing.")
         return session_id
