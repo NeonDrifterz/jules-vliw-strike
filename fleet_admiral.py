@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+import time
+import os
+import subprocess
+import sys
+import datetime
+import csv
+import threading
+import hashlib
+import argparse
+
+# --- Constants ---
+TASK_FILE = "TASK_QUEUE.txt"
+STATE_FILE = "CURRENT_STATE.md"
+STEALTH_RUN = "./stealth_run.sh"
+HEARTBEAT_FILE = ".heartbeat"
+
+# --- Modules ---
+try:
+    from penfield_link import PenfieldClient
+except ImportError:
+    PenfieldClient = None # Graceful degrade if module not found
+
+# --- Logic ---
+
+def load_tasks():
+    tasks = []
+    if os.path.exists(TASK_FILE):
+        with open(TASK_FILE, 'r') as f:
+            reader = csv.DictReader(f)
+            tasks = list(reader)
+    return tasks
+
+def save_tasks(tasks):
+    if not tasks: return
+    fieldnames = list(tasks[0].keys())
+    with open(TASK_FILE, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(tasks)
+
+def update_state(message, penfield=None):
+    """
+    Update local state and sync with Penfield if connected.
+    """
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_msg = f"[ADMIRAL] {timestamp} - {message}"
+    
+    # 1. Console
+    print(log_msg)
+    
+    # 2. Local File
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'a') as f:
+                f.write(f"\n{log_msg}\n")
+        except Exception as e:
+            print(f"Failed to write to state file: {e}")
+
+    # 3. Penfield Sync (The Hive Mind)
+    if penfield:
+        try:
+            # Only sync critical events to save API calls
+            if "started" in message.lower() or "finished" in message.lower() or "failed" in message.lower() or "pause" in message.lower():
+                penfield.store_memory(
+                    content=message,
+                    memory_type="fact", 
+                    tags=["admiral", "orchestration"],
+                    importance=0.7
+                )
+        except Exception as e:
+            print(f"[ADMIRAL] Penfield Sync Error: {e}")
+
+def check_process(pid):
+    """Check if process is running."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+    except ValueError:
+        return False
+
+def run_task(task, penfield=None):
+    cmd = task['Command']
+    update_state(f"Starting task {task['ID']}: {cmd}", penfield)
+    
+    try:
+        # Run stealth_run.sh and capture output to get PID
+        result = subprocess.run([STEALTH_RUN, cmd], capture_output=True, text=True, check=True)
+        output = result.stdout.strip()
+        
+        pid = ""
+        # Expected: "Stealth mode engaged. PID: 1234. Log: logs/stealth_last.log"
+        if "PID:" in output:
+            parts = output.split()
+            for i, part in enumerate(parts):
+                if part == "PID:":
+                    # Remove trailing punctuation like '.'
+                    pid = parts[i+1].rstrip('.')
+                    break
+        
+        task['Status'] = 'RUNNING'
+        task['PID'] = pid
+        task['LogPath'] = "logs/stealth_last.log" 
+        
+        update_state(f"Task {task['ID']} running (PID {pid}).", penfield)
+        return task
+    except subprocess.CalledProcessError as e:
+        update_state(f"Failed to start task {task['ID']}: {e.stderr}", penfield)
+        task['Status'] = 'FAILED'
+        return task
+    except Exception as e:
+        update_state(f"Exception starting task {task['ID']}: {e}", penfield)
+        task['Status'] = 'FAILED'
+        return task
+
+def touch_heartbeat(timestamp=None):
+    if timestamp is None:
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(HEARTBEAT_FILE, 'w') as f:
+        f.write(timestamp)
+    return timestamp
+
+def heartbeat_loop(penfield=None):
+    """Runs a heartbeat loop to prevent idle timeouts and detect VM pauses."""
+    print("[ADMIRAL] Heartbeat thread started.")
+    
+    while True:
+        start_time = time.time()
+        
+        # 1. Update Heartbeat
+        ts_str = touch_heartbeat()
+        
+        # 2. Simulate CPU Activity
+        h = hashlib.sha256(ts_str.encode()).hexdigest()
+        
+        # Only log locally to reduce noise
+        # print(f"[HEARTBEAT] {ts_str} - Alive (Hash: {h[:8]})")
+        
+        # 3. Sleep & Detect VM Pauses
+        sleep_duration = 60
+        time.sleep(sleep_duration)
+        
+        end_time = time.time()
+        elapsed = end_time - start_time
+        
+        # If elapsed time is significantly greater than sleep_duration + overhead (e.g., > 65s)
+        if elapsed > (sleep_duration + 5):
+            pause_duration = elapsed - sleep_duration
+            msg = f"VM PAUSE DETECTED! System slept for {elapsed:.2f}s (Expected ~{sleep_duration}s). Pause: ~{pause_duration:.2f}s."
+            print(f"[HEARTBEAT] {msg}")
+            update_state(msg, penfield) # Critical event -> Sync to Penfield
+            
+            # Immediately touch heartbeat to prevent stale check
+            touch_heartbeat()
+
+def monitor_tasks(keep_alive=False, penfield=None):
+    if keep_alive:
+        t = threading.Thread(target=heartbeat_loop, args=(penfield,), daemon=True)
+        t.start()
+
+    while True:
+        try:
+            tasks = load_tasks()
+            if not tasks:
+                time.sleep(5)
+                continue
+            
+            active_task_idx = -1
+            pending_task_idx = -1
+            
+            # Find active task (first one running)
+            for i, task in enumerate(tasks):
+                if task['Status'] == 'RUNNING':
+                    active_task_idx = i
+                    break
+            
+            # Find pending task (first one pending)
+            if active_task_idx == -1:
+                for i, task in enumerate(tasks):
+                    if task['Status'] == 'PENDING':
+                        pending_task_idx = i
+                        break
+            
+            if active_task_idx != -1:
+                # Check status of active task
+                task = tasks[active_task_idx]
+                pid = task['PID']
+                if pid and check_process(pid):
+                    # Still running
+                    pass
+                else:
+                    # Process finished
+                    update_state(f"Task {task['ID']} finished.", penfield)
+                    task['Status'] = 'COMPLETED'
+                    save_tasks(tasks)
+            
+            elif pending_task_idx != -1:
+                # Start pending task
+                task = tasks[pending_task_idx]
+                updated_task = run_task(task, penfield)
+                tasks[pending_task_idx] = updated_task
+                save_tasks(tasks)
+            
+            else:
+                # No tasks running or pending
+                pass
+                
+        except Exception as e:
+            update_state(f"Error in monitoring loop: {e}", penfield)
+        
+        time.sleep(5) # Poll every 5 seconds
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Fleet Admiral Orchestrator")
+    parser.add_argument("--keep-alive", action="store_true", help="Enable heartbeat to prevent idle timeouts")
+    parser.add_argument("--penfield-sync", action="store_true", help="Enable sync with Penfield API (requires PENFIELD_API_KEY)")
+    args = parser.parse_args()
+
+    if not os.path.exists(STEALTH_RUN):
+        print(f"Error: {STEALTH_RUN} not found.")
+        sys.exit(1)
+
+    penfield_client = None
+    if args.penfield_sync:
+        if PenfieldClient:
+            try:
+                penfield_client = PenfieldClient()
+                print("[ADMIRAL] Connected to Penfield Hive Mind.")
+            except ValueError:
+                print("[ADMIRAL] Error: PENFIELD_API_KEY not found. Sync disabled.")
+        else:
+            print("[ADMIRAL] Error: penfield_link module not found. Sync disabled.")
+        
+    print(f"Fleet Admiral Online. Monitoring tasks... (Keep-Alive: {args.keep_alive}, Penfield Sync: {bool(penfield_client)})")
+    monitor_tasks(keep_alive=args.keep_alive, penfield=penfield_client)
