@@ -7,7 +7,7 @@ echo "[BOOTSTRAP] Admiral initiation started."
 
 # 2. Synchronize logic
 echo "[BOOTSTRAP] Pulling latest orchestrator logic..."
-git pull origin main
+git pull origin master
 
 # 3. Launch the Fleet Admiral loop in the foreground
 # This keeps the Jules session ALIVE as long as the script runs.
