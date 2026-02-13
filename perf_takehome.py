@@ -571,7 +571,7 @@ class KernelBuilder:
                 S.valu("^", v_t1[i], v_val[i], v_h1[5])
                 S.valu(">>", v_t2[i], v_val[i], v_h3[5])
                 S.valu("^", v_val[i], v_t1[i], v_t2[i])
-                
+
                 if level == forest_height:
                     s_zero = self.get_const(0)
                     for vi in range(VLEN):

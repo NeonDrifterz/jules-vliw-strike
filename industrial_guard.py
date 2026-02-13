@@ -3,11 +3,16 @@ import os
 import datetime
 import subprocess
 import sys
+import argparse
 
 # PERSISTENCE PROTOCOL ALPHA: FOREGROUND ENTRAPMENT
 # 1. No backgrounding (&) allowed.
 # 2. No early submission.
 # 3. Active I/O and CPU tickling.
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--interval", type=int, default=60, help="Heartbeat interval in seconds")
+args = parser.parse_args()
 
 DURATION_HOURS = 4.0
 START_TIME = datetime.datetime.utcnow()
@@ -18,8 +23,7 @@ def log(msg):
     print(f"[{now}] [INDUSTRIAL_GUARD] {msg}")
     sys.stdout.flush()
     with open("MISSION_LOG.md", "a") as f:
-        f.write(f"[{now}] {msg}
-")
+        f.write(f"[{now}] {msg}\n")
 
 def tickle_system():
     # CPU Tickle: Simple math
@@ -28,7 +32,7 @@ def tickle_system():
     subprocess.run(["sync"], check=True)
     subprocess.run(["df", "-h", "/"], capture_output=True)
 
-log(f"MISSION INITIALIZED: 4-Hour Foreground Siege.")
+log(f"MISSION INITIALIZED: 4-Hour Foreground Siege (Interval: {args.interval}s).")
 log(f"Target End Time (UTC): {END_TIME.isoformat()}")
 
 try:
@@ -42,8 +46,8 @@ try:
         # Perform system tickle
         tickle_system()
         
-        # Stay in the foreground. Wait 60 seconds.
-        time.sleep(60)
+        # Stay in the foreground.
+        time.sleep(args.interval)
 
     log("MISSION COMPLETE: 4-Hour Persistence Mark Reached.")
     log("SAFE TO CONCLUDE.")
