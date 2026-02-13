@@ -129,7 +129,13 @@ class SemanticScheduler:
                     ready.append(i)
 
             def sort_key(i):
-                return (-cp_length_list[i], i)
+                engine = ops_list[i][0]
+                # Priority: 
+                # 1. Critical path length (Primary)
+                # 2. VALU instructions (Bottleneck engine)
+                # 3. Number of successors (Unblocking potential)
+                # 4. Original order (Stability)
+                return (-cp_length_list[i], engine != "valu", -len(successors_list[i]), i)
             ready.sort(key=sort_key)
 
             bundles = []
@@ -189,7 +195,7 @@ class SemanticScheduler:
             self._op_cycles = best_cycles
             rng.setstate(rng_state)
 
-        self._refine_tail_cpsat(deps, max_windows=3, window_cycles=160, time_limit_s=2.0, max_ops_in_window=5000)
+        self._refine_tail_cpsat(deps, max_windows=3, window_cycles=320, time_limit_s=2.0, max_ops_in_window=5000)
 
     def _refine_tail_cpsat(self, deps, max_windows=3, window_cycles=160, time_limit_s=2.0, max_ops_in_window=5000):
         """Windowed CP-SAT refinement: re-schedule tail operations for tighter packing."""
@@ -414,11 +420,19 @@ class KernelBuilder:
         v_h1 = [self.alloc_vector(f"h1_{i}") for i in range(6)]
         v_h3 = [self.alloc_vector(f"h3_{i}") for i in range(6)]
         v_hm = {i: self.alloc_vector(f"hm_{i}") for i in [0, 2, 4]}
+        v_h_fused = self.alloc_vector("h_fused")
+        v_h_shift_mul = self.alloc_vector("h_shift_mul")
+        v_h_shift_add = self.alloc_vector("h_shift_add")
+        
         for i, (_, v1, _, _, v3) in enumerate(HASH_STAGES):
             S.vbroadcast(v_h1[i], self.get_const(v1))
             S.vbroadcast(v_h3[i], self.get_const(v3))
             if i in v_hm:
                 S.vbroadcast(v_hm[i], self.get_const({0: 4097, 2: 33, 4: 9}[i]))
+        
+        S.vbroadcast(v_h_fused, self.get_const((0x165667B1 + 0xD3A2646C) % (2**32)))
+        S.vbroadcast(v_h_shift_mul, self.get_const(33 << 9))
+        S.vbroadcast(v_h_shift_add, self.get_const((0x165667B1 << 9) % (2**32)))
 
         # ── Preload L0-L2 node values as scalars ──
         s_na = self.alloc_scalar("na")
@@ -541,13 +555,22 @@ class KernelBuilder:
             level = r % (forest_height + 1)
             if not vecs: return
             for i in vecs:
-                for hi, (op1, _, op2, op3, _) in enumerate(HASH_STAGES):
-                    if hi in [0, 2, 4]:
-                        S.valu("multiply_add", v_val[i], v_val[i], v_hm[hi], v_h1[hi])
-                    else:
-                        S.valu(op1, v_t1[i], v_val[i], v_h1[hi])
-                        S.valu(op3, v_t2[i], v_val[i], v_h3[hi])
-                        S.valu(op2, v_val[i], v_t1[i], v_t2[i])
+                # Stage 0: Fused multiply_add
+                S.valu("multiply_add", v_val[i], v_val[i], v_hm[0], v_h1[0])
+                # Stage 1: Standard logic
+                S.valu("^", v_t1[i], v_val[i], v_h1[1])
+                S.valu(">>", v_t2[i], v_val[i], v_h3[1])
+                S.valu("^", v_val[i], v_t1[i], v_t2[i])
+                # Stage 2 + 3: Structural Fusion (3 ops replaces 4)
+                S.valu("multiply_add", v_t1[i], v_val[i], v_hm[2], v_h_fused)
+                S.valu("multiply_add", v_t2[i], v_val[i], v_h_shift_mul, v_h_shift_add)
+                S.valu("^", v_val[i], v_t1[i], v_t2[i])
+                # Stage 4: Fused multiply_add
+                S.valu("multiply_add", v_val[i], v_val[i], v_hm[4], v_h1[4])
+                # Stage 5: Standard logic
+                S.valu("^", v_t1[i], v_val[i], v_h1[5])
+                S.valu(">>", v_t2[i], v_val[i], v_h3[5])
+                S.valu("^", v_val[i], v_t1[i], v_t2[i])
                 
                 if level == forest_height:
                     s_zero = self.get_const(0)
@@ -614,7 +637,7 @@ class KernelBuilder:
             for v in range(VLEN):
                 S.alu("+", tmp_va, s_sp_reg, self.get_const(v)); S.store(tmp_va, a_val[i][v])
 
-        S.pause(n_iters=100)
+        S.pause(n_iters=1000)
         S.print_heatmap()
         self.instrs = S.bundles
 
